@@ -55,3 +55,35 @@ docs/_build/
 
 # PyBuilder
 target/
+
+*~
+\#*
+.#*
+*.sh
+*.tgz
+nohup.out
+clusters/
+seismic_experiments/
+
+#       #gprfopt.py#
+#       #gprfopt_analyze.py#
+#       .#gprfopt_analyze.py
+#       analyze_lines.sh
+#       clusters/
+#       gprf.py~
+#       gprfopt.py~
+#       gprfopt_analyze.py~
+#       nohup.out
+#       run_all.sh
+#       run_fixedsize.sh
+#       run_fixedsize_blocks.sh
+#       run_lines.sh
+#       run_seismic.py
+#       run_seismic.py~
+#       run_seismic.sh
+#       seismic/align_seismic_waves.py~
+#       seismic/combine_clusters.py
+#       seismic/combine_clusters.py~
+#       seismic_X_final.tgz
+#       seismic_X_progress.tgz
+#       seismic_experiments/
