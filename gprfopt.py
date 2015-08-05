@@ -256,37 +256,49 @@ class GPyConstDiagonalGaussian(Prior):
         self.constant = -0.5 * self.input_dim * np.log(2 * np.pi * self.var) 
 
 
-def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False):
+def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600, 
+                 parallel=False, gplvm_type="bayesian", num_inducing=100):
 
     import GPy
 
     dim = sdata.SX.shape[1]
+    # adjust kernel lengthscale to match GPy's defn of the RBF kernel incl a -.5 factor
     k = GPy.kern.RBF(dim, ARD=0, lengthscale=np.sqrt(.5)*sdata.lscale, variance=1.0)
     k.lengthscale.fix()
     k.variance.fix()
 
     XObs = sdata.X_obs.copy()
-    m = GPy.models.GPLVM(sdata.SY, dim, X=XObs, kernel=k)
-    m.likelihood.variance = sdata.noise_var
-    m.likelihood.variance.fix()
-    m.likelihood.unlink_parameter(m.likelihood.variance)
-    m.kern.unlink_parameter(m.kern.variance)
-    m.kern.unlink_parameter(m.kern.lengthscale)
 
     p = GPyConstDiagonalGaussian(XObs.flatten(), sdata.obs_std**2)
-    m.X.set_prior(p)
+    if gplvm_type=="bayesian":
+        print "bayesian GPLVM with %d inducing inputs" % num_inducing
+        m = GPy.models.BayesianGPLVM(sdata.SY, dim, X=X0, X_variance = np.ones(XObs.shape)*sdata.obs_std**2, kernel=k, num_inducing=num_inducing)
+        m.X.mean.set_prior(p)
+    elif gplvm_type=="sparse":
+        print "sparse non-bayesian GPLVM with %d inducing inputs" % num_inducing
+        m = GPy.models.SparseGPLVM(sdata.SY, dim, X=X0, kernel=k, num_inducing=num_inducing)
 
-    x0 = XObs.flatten()
-    print p.lnpdf(x0)
-    print sdata.x_prior(x0)[0]
+        from GPy.core import  Param
+        m.X = Param('latent_mean', X0)
+        m.link_parameter(m.X, index=0)
 
-    bounds = [(0.0, 1.0),]*X0.size
+        m.X.set_prior(p)        
+    elif gplvm_type=="basic":
+        print "basic GPLVM on full dataset"
+        m = GPy.models.GPLVM(sdata.SY, dim, X=XObs, kernel=k)
+        m.X.set_prior(p)
 
+    m.likelihood.variance = sdata.noise_var
+    m.likelihood.variance.fix()
+    
+
+    nmeans = X0.size
     sstep = [0,]
     f_log = open(os.path.join(d, "log.txt"), 'w')
     t0 = time.time()
     def llgrad_wrapper(xx):
-        XX = xx.reshape(X0.shape)
+        XX = xx[:nmeans].reshape(X0.shape)
+
         np.save(os.path.join(d, "step_%05d_X.npy" % sstep[0]), XX)
         ll, grad = m._objective_grads(xx)
 
@@ -301,26 +313,12 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False):
 
         return ll, grad
     
-    xtest = sdata.SX.flatten()
-    #l1, g1 = llgrad_wrapper(xtest)
+    x0 = m.optimizer_array
+    bounds = [(0.0, 1.0),]*nmeans + [(None, None)]*(x0.size-nmeans)
 
-    #gprf.update_X(sdata.SX)
-    #ll, gX, gC = gprf.llgrad(local=True, grad_X=True, grad_cov=False,  parallel=True)
-    #ll_prior, grad_prior = sdata.x_prior(xtest)
-    #llfull = ll+ll_prior
-    #gfull = gX.flatten() + grad_prior
-    
-    #import pdb; pdb.set_trace()
-
-    gprf.update_X(sdata.SX)
-    tt0 = time.time()
-    ll, gX, gC = gprf.llgrad(local=True, grad_X=False, grad_cov=False,  parallel=True)
-    tt1 = time.time()
-    ll1 = m._objective(xtest)
-    tt2 = time.time()
-
-    import pdb; pdb.set_trace()
     r = scipy.optimize.minimize(llgrad_wrapper, x0, jac=True, method=method, bounds=bounds)
+
+
 
     t1 = time.time()
     f_log.write("optimization finished after %.fs\n" % (time.time()-t0))
@@ -577,7 +575,7 @@ def do_run(d, lscale, n, ntrain, nblocks, yd, seed=0,
            obs_std=None, local_dist=1.0, maxsec=3600,
            task='x', analyze_only=False, analyze_full=False,
            init_seed=-1, parallel=False,
-           noise_var=0.01, rpc_blocksize=-1, run_gpy=False):
+           noise_var=0.01, rpc_blocksize=-1, gplvm_type=None, num_inducing=-1):
 
     if rpc_blocksize==-1:
         pmax = np.ceil(np.sqrt(nblocks))*2+1
@@ -617,8 +615,10 @@ def do_run(d, lscale, n, ntrain, nblocks, yd, seed=0,
         raise Exception("unrecognized task "+ task)
 
     if not analyze_only:
-        if run_gpy:
-            do_gpy_gplvm(d, gprf, X0, C0, data, method=method, maxsec=maxsec, parallel=parallel)
+        if gplvm_type != "gprf":
+            do_gpy_gplvm(d, gprf, X0, C0, data, method=method, 
+                         maxsec=maxsec, parallel=parallel,
+                         gplvm_type=gplvm_type, num_inducing=num_inducing)
         else:
             do_optimization(d, gprf, X0, C0, data, method=method, maxsec=maxsec, parallel=parallel)
 
@@ -657,13 +657,13 @@ def fast_analyze(d, sdata):
 
 def build_run_name(args):
     try:
-        ntrain, n, nblocks, lscale, obs_std, local_dist, yd, method, task, init_seed, noise_var, rpc_blocksize, seed = (args.ntrain, args.n, args.nblocks, args.lscale, args.obs_std, args.local_dist, args.yd, args.method, args.task, args.init_seed, args.noise_var, args.rpc_blocksize, args.seed)
+        ntrain, n, nblocks, lscale, obs_std, local_dist, yd, method, task, init_seed, noise_var, rpc_blocksize, seed, gplvm_type, num_inducing = (args.ntrain, args.n, args.nblocks, args.lscale, args.obs_std, args.local_dist, args.yd, args.method, args.task, args.init_seed, args.noise_var, args.rpc_blocksize, args.seed, args.gplvm_type, args.num_inducing)
     except:
-        defaults = { 'yd': 50, 'seed': 0, 'local_dist': 0.05, "method": 'l-bfgs-b', 'task': 'x', 'init_seed': -1, 'noise_var': 0.01, 'rpc_blocksize': -1}
+        defaults = { 'yd': 50, 'seed': 0, 'local_dist': 0.05, "method": 'l-bfgs-b', 'task': 'x', 'init_seed': -1, 'noise_var': 0.01, 'rpc_blocksize': -1, 'gplvm_type': "gprf", 'num_inducing': -1}
         defaults.update(args)
         args = defaults
-        ntrain, n, nblocks, lscale, obs_std, local_dist, yd, method, task, init_seed, noise_var, rpc_blocksize, seed = (args['ntrain'], args['n'], args['nblocks'], args['lscale'], args['obs_std'], args['local_dist'], args['yd'], args['method'], args['task'], args['init_seed'], args['noise_var'], args['rpc_blocksize'], args['seed'])
-    run_name = "%d_%d_%s_%.2f_%.2f_%.3f_%d_%s_%s_%d%s%s" % (ntrain, n, "%d" % nblocks if rpc_blocksize==-1 else "%06d" % rpc_blocksize, lscale, obs_std, local_dist, yd, method, task, init_seed, "" if noise_var==0.01 else "%.4f" % noise_var, "" if seed==0 else "_s%d" % seed)
+        ntrain, n, nblocks, lscale, obs_std, local_dist, yd, method, task, init_seed, noise_var, rpc_blocksize, seed, gplvm_type, num_inducing = (args['ntrain'], args['n'], args['nblocks'], args['lscale'], args['obs_std'], args['local_dist'], args['yd'], args['method'], args['task'], args['init_seed'], args['noise_var'], args['rpc_blocksize'], args['seed'], args['gplvm_type'], args['num_inducing'])
+    run_name = "%d_%d_%s_%.2f_%.2f_%.3f_%d_%s_%s_%d_%s_s%s_%s%d" % (ntrain, n, "%d" % nblocks if rpc_blocksize==-1 else "%06d" % rpc_blocksize, lscale, obs_std, local_dist, yd, method, task, init_seed, "%.4f" % noise_var, "%d" % seed, gplvm_type, num_inducing)
     return run_name
 
 def exp_dir(args):
@@ -696,12 +696,13 @@ def main():
     parser.add_argument('--parallel', dest='parallel', default=False, action="store_true")
     parser.add_argument('--init_seed', dest='init_seed', default=-1, type=int)
     parser.add_argument('--noise_var', dest='noise_var', default=0.01, type=float)
-    parser.add_argument('--run_gpy', dest='run_gpy', default=False, action="store_true")
+    parser.add_argument('--gplvm_type', dest='gplvm_type', default="gprf", type=str)
+    parser.add_argument('--num_inducing', dest='num_inducing', default=0, type=int)
 
     args = parser.parse_args()
 
     d = exp_dir(args)
-    do_run(d=d, lscale=args.lscale, obs_std=args.obs_std, local_dist=args.local_dist, n=args.n, ntrain=args.ntrain, nblocks=args.nblocks, yd=args.yd, method=args.method, rpc_blocksize=args.rpc_blocksize, seed=args.seed, maxsec=args.maxsec, analyze_only=args.analyze, analyze_full = args.analyze_full, task=args.task, init_seed=args.init_seed, noise_var=args.noise_var, parallel=args.parallel, run_gpy=args.run_gpy)
+    do_run(d=d, lscale=args.lscale, obs_std=args.obs_std, local_dist=args.local_dist, n=args.n, ntrain=args.ntrain, nblocks=args.nblocks, yd=args.yd, method=args.method, rpc_blocksize=args.rpc_blocksize, seed=args.seed, maxsec=args.maxsec, analyze_only=args.analyze, analyze_full = args.analyze_full, task=args.task, init_seed=args.init_seed, noise_var=args.noise_var, parallel=args.parallel, gplvm_type=args.gplvm_type, num_inducing=args.num_inducing)
 
 if __name__ == "__main__":
     main()
