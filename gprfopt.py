@@ -316,8 +316,13 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
     x0 = m.optimizer_array
     bounds = [(0.0, 1.0),]*nmeans + [(None, None)]*(x0.size-nmeans)
 
-    r = scipy.optimize.minimize(llgrad_wrapper, x0, jac=True, method=method, bounds=bounds)
 
+
+    try:
+        r = scipy.optimize.minimize(llgrad_wrapper, x0, jac=True, method=method, bounds=bounds)
+        rx = r.x
+    except OutOfTimeError:
+        print "terminated optimization for time"
 
 
     t1 = time.time()
