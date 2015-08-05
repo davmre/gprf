@@ -179,9 +179,160 @@ class SampledData(object):
         return self.X_obs + np.random.randn(*self.X_obs.shape)*jitter_std
 
 
+
 cachex = None
 cachell = None
 cachegrad = None
+
+from GPy.core.parameterization.priors import Prior
+import weakref
+class GPyConstDiagonalGaussian(Prior):
+    """
+    Implementation of the multivariate Gaussian probability function, coupled with random variables.
+
+    :param mu: mean (N-dimensional array)
+    :param var: covariance matrix (NxN)
+
+    .. Note:: Bishop 2006 notation is used throughout the code
+
+    """
+    from GPy.core.parameterization.domains import _REAL, _POSITIVE
+    domain = _REAL
+    _instances = []
+
+    def __new__(cls, mu=0, var=1):  # Singleton:
+        if cls._instances:
+            cls._instances[:] = [instance for instance in cls._instances if instance()]
+            for instance in cls._instances:
+                if np.all(instance().mu == mu) and np.all(instance().var == var):
+                    return instance()
+        o = super(Prior, cls).__new__(cls, mu, var)
+        cls._instances.append(weakref.ref(o))
+        return cls._instances[-1]()
+
+    def __init__(self, mu, var):
+        self.mu = np.array(mu).flatten()
+        self.var = float(var)
+        self.input_dim = self.mu.size
+        self.inv = 1.0/self.var
+
+        self.constant = -0.5 * self.input_dim * np.log(2 * np.pi * self.var)
+
+
+
+    def summary(self):
+        raise NotImplementedError
+
+
+    def pdf(self, x):
+        return np.exp(self.lnpdf(x))
+
+
+    def lnpdf(self, x):
+        d = x - self.mu
+        return self.constant - 0.5 * np.dot(d, d) * self.inv
+
+
+    def lnpdf_grad(self, x):
+        d = x - self.mu
+        return -d*self.inv
+
+
+    def rvs(self, n):
+        return self.mu + np.random.randn(self.mu.size, n) * np.sqrt(self.var)
+
+
+    def plot(self):
+        import sys
+
+        assert "matplotlib" in sys.modules, "matplotlib package has not been imported."
+        from ..plotting.matplot_dep import priors_plots
+
+        priors_plots.multivariate_plot(self)
+
+    def __getstate__(self):
+        return self.mu, self.var
+
+    def __setstate__(self, state):
+        self.mu = state[0]
+        self.var = float(state[1])
+        self.input_dim = self.mu.size
+        self.inv = 1.0/self.var
+        self.constant = -0.5 * self.input_dim * np.log(2 * np.pi * self.var)
+
+
+def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
+                 parallel=False, gplvm_type="bayesian", num_inducing=100):
+
+    import GPy
+
+    dim = sdata.SX.shape[1]
+    # adjust kernel lengthscale to match GPy's defn of the RBF kernel incl a -.5 factor
+    k = GPy.kern.RBF(dim, ARD=0, lengthscale=np.sqrt(.5)*sdata.lscale, variance=1.0)
+    k.lengthscale.fix()
+    k.variance.fix()
+
+    XObs = sdata.X_obs.copy()
+
+    p = GPyConstDiagonalGaussian(XObs.flatten(), sdata.obs_std**2)
+    if gplvm_type=="bayesian":
+        print "bayesian GPLVM with %d inducing inputs" % num_inducing
+        m = GPy.models.BayesianGPLVM(sdata.SY, dim, X=X0, X_variance = np.ones(XObs.shape)*sdata.obs_std**2, kernel=k, num_inducing=num_inducing)
+        m.X.mean.set_prior(p)
+    elif gplvm_type=="sparse":
+        print "sparse non-bayesian GPLVM with %d inducing inputs" % num_inducing
+        m = GPy.models.SparseGPLVM(sdata.SY, dim, X=X0, kernel=k, num_inducing=num_inducing)
+
+        from GPy.core import  Param
+        m.X = Param('latent_mean', X0)
+        m.link_parameter(m.X, index=0)
+
+        m.X.set_prior(p)
+    elif gplvm_type=="basic":
+        print "basic GPLVM on full dataset"
+        m = GPy.models.GPLVM(sdata.SY, dim, X=XObs, kernel=k)
+        m.X.set_prior(p)
+
+    m.likelihood.variance = sdata.noise_var
+    m.likelihood.variance.fix()
+
+
+    nmeans = X0.size
+    sstep = [0,]
+    f_log = open(os.path.join(d, "log.txt"), 'w')
+    t0 = time.time()
+    def llgrad_wrapper(xx):
+        XX = xx[:nmeans].reshape(X0.shape)
+
+        np.save(os.path.join(d, "step_%05d_X.npy" % sstep[0]), XX)
+        ll, grad = m._objective_grads(xx)
+
+        print "%d %.2f %.2f" % (sstep[0], time.time()-t0, -ll)
+        f_log.write("%d %.2f %.2f\n" % (sstep[0], time.time()-t0, -ll))
+        f_log.flush()
+
+        sstep[0] += 1
+
+        if time.time()-t0 > maxsec:
+            raise OutOfTimeError
+
+        return ll, grad
+
+    x0 = m.optimizer_array
+    bounds = [(0.0, 1.0),]*nmeans + [(None, None)]*(x0.size-nmeans)
+
+    r = scipy.optimize.minimize(llgrad_wrapper, x0, jac=True, method=method, bounds=bounds)
+
+
+
+    t1 = time.time()
+    f_log.write("optimization finished after %.fs\n" % (time.time()-t0))
+    f_log.close()
+
+    with open(os.path.join(d, "finished"), 'w') as f:
+        f.write("")
+
+
 
 def do_optimization(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False):
 
@@ -459,7 +610,7 @@ def do_run(d, lscale, n, ntrain, nblocks, yd, seed=0,
            obs_std=None, local_dist=1.0, maxsec=3600,
            task='x', analyze_only=False, analyze_full=False,
            init_seed=-1, parallel=False,
-           noise_var=0.01, rpc_blocksize=-1):
+           noise_var=0.01, rpc_blocksize=-1, gplvm_type=None, num_inducing=-1):
 
     if rpc_blocksize==-1:
         pmax = np.ceil(np.sqrt(nblocks))*2+1
@@ -474,6 +625,7 @@ def do_run(d, lscale, n, ntrain, nblocks, yd, seed=0,
         obs_std = lscale/10
 
     data = sample_data(n=n, ntrain=ntrain, lscale=lscale, obs_std=obs_std, yd=yd, seed=seed, centers=centers, noise_var=noise_var, rpc_blocksize=rpc_blocksize)
+    #if not run_gpy:
     gprf = data.build_gprf(local_dist=local_dist)
 
     if task=='x':
@@ -498,7 +650,13 @@ def do_run(d, lscale, n, ntrain, nblocks, yd, seed=0,
         raise Exception("unrecognized task "+ task)
 
     if not analyze_only:
-        do_optimization(d, gprf, X0, C0, data, method=method, maxsec=maxsec, parallel=parallel)
+        if gplvm_type != "gprf":
+            do_gpy_gplvm(d, gprf, X0, C0, data, method=method,
+                         maxsec=maxsec, parallel=parallel,
+                         gplvm_type=gplvm_type, num_inducing=num_inducing)
+        else:
+            do_optimization(d, gprf, X0, C0, data, method=method, maxsec=maxsec, parallel=parallel)
+
 
     analyze_run(d, data, local_dist=local_dist, predict=analyze_full)
 
@@ -534,13 +692,13 @@ def fast_analyze(d, sdata):
 
 def build_run_name(args):
     try:
-        ntrain, n, nblocks, lscale, obs_std, local_dist, yd, method, task, init_seed, noise_var, rpc_blocksize, seed = (args.ntrain, args.n, args.nblocks, args.lscale, args.obs_std, args.local_dist, args.yd, args.method, args.task, args.init_seed, args.noise_var, args.rpc_blocksize, args.seed)
+        ntrain, n, nblocks, lscale, obs_std, local_dist, yd, method, task, init_seed, noise_var, rpc_blocksize, seed, gplvm_type, num_inducing = (args.ntrain, args.n, args.nblocks, args.lscale, args.obs_std, args.local_dist, args.yd, args.method, args.task, args.init_seed, args.noise_var, args.rpc_blocksize, args.seed, args.gplvm_type, args.num_inducing)
     except:
-        defaults = { 'yd': 50, 'seed': 0, 'local_dist': 0.05, "method": 'l-bfgs-b', 'task': 'x', 'init_seed': -1, 'noise_var': 0.01, 'rpc_blocksize': -1}
+        defaults = { 'yd': 50, 'seed': 0, 'local_dist': 0.05, "method": 'l-bfgs-b', 'task': 'x', 'init_seed': -1, 'noise_var': 0.01, 'rpc_blocksize': -1, 'gplvm_type': "gprf", 'num_inducing': -1}
         defaults.update(args)
         args = defaults
-        ntrain, n, nblocks, lscale, obs_std, local_dist, yd, method, task, init_seed, noise_var, rpc_blocksize, seed = (args['ntrain'], args['n'], args['nblocks'], args['lscale'], args['obs_std'], args['local_dist'], args['yd'], args['method'], args['task'], args['init_seed'], args['noise_var'], args['rpc_blocksize'], args['seed'])
-    run_name = "%d_%d_%s_%.2f_%.2f_%.3f_%d_%s_%s_%d%s%s" % (ntrain, n, "%d" % nblocks if rpc_blocksize==-1 else "%06d" % rpc_blocksize, lscale, obs_std, local_dist, yd, method, task, init_seed, "" if noise_var==0.01 else "%.4f" % noise_var, "" if seed==0 else "_s%d" % seed)
+        ntrain, n, nblocks, lscale, obs_std, local_dist, yd, method, task, init_seed, noise_var, rpc_blocksize, seed, gplvm_type, num_inducing = (args['ntrain'], args['n'], args['nblocks'], args['lscale'], args['obs_std'], args['local_dist'], args['yd'], args['method'], args['task'], args['init_seed'], args['noise_var'], args['rpc_blocksize'], args['seed'], args['gplvm_type'], args['num_inducing'])
+    run_name = "%d_%d_%s_%.2f_%.2f_%.3f_%d_%s_%s_%d_%s_s%s_%s%d" % (ntrain, n, "%d" % nblocks if rpc_blocksize==-1 else "%06d" % rpc_blocksize, lscale, obs_std, local_dist, yd, method, task, init_seed, "%.4f" % noise_var, "%d" % seed, gplvm_type, num_inducing)
     return run_name
 
 def exp_dir(args):
@@ -573,11 +731,13 @@ def main():
     parser.add_argument('--parallel', dest='parallel', default=False, action="store_true")
     parser.add_argument('--init_seed', dest='init_seed', default=-1, type=int)
     parser.add_argument('--noise_var', dest='noise_var', default=0.01, type=float)
+    parser.add_argument('--gplvm_type', dest='gplvm_type', default="gprf", type=str)
+    parser.add_argument('--num_inducing', dest='num_inducing', default=0, type=int)
 
     args = parser.parse_args()
 
     d = exp_dir(args)
-    do_run(d=d, lscale=args.lscale, obs_std=args.obs_std, local_dist=args.local_dist, n=args.n, ntrain=args.ntrain, nblocks=args.nblocks, yd=args.yd, method=args.method, rpc_blocksize=args.rpc_blocksize, seed=args.seed, maxsec=args.maxsec, analyze_only=args.analyze, analyze_full = args.analyze_full, task=args.task, init_seed=args.init_seed, noise_var=args.noise_var, parallel=args.parallel)
+    do_run(d=d, lscale=args.lscale, obs_std=args.obs_std, local_dist=args.local_dist, n=args.n, ntrain=args.ntrain, nblocks=args.nblocks, yd=args.yd, method=args.method, rpc_blocksize=args.rpc_blocksize, seed=args.seed, maxsec=args.maxsec, analyze_only=args.analyze, analyze_full = args.analyze_full, task=args.task, init_seed=args.init_seed, noise_var=args.noise_var, parallel=args.parallel, gplvm_type=args.gplvm_type, num_inducing=args.num_inducing)
 
 if __name__ == "__main__":
     main()
