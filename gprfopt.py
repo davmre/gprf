@@ -179,6 +179,11 @@ class SampledData(object):
         return self.X_obs + np.random.randn(*self.X_obs.shape)*jitter_std
 
 
+
+cachex = None
+cachell = None
+cachegrad = None
+
 from GPy.core.parameterization.priors import Prior
 import weakref
 class GPyConstDiagonalGaussian(Prior):
@@ -211,7 +216,7 @@ class GPyConstDiagonalGaussian(Prior):
         self.input_dim = self.mu.size
         self.inv = 1.0/self.var
 
-        self.constant = -0.5 * self.input_dim * np.log(2 * np.pi * self.var) 
+        self.constant = -0.5 * self.input_dim * np.log(2 * np.pi * self.var)
 
 
 
@@ -253,10 +258,10 @@ class GPyConstDiagonalGaussian(Prior):
         self.var = float(state[1])
         self.input_dim = self.mu.size
         self.inv = 1.0/self.var
-        self.constant = -0.5 * self.input_dim * np.log(2 * np.pi * self.var) 
+        self.constant = -0.5 * self.input_dim * np.log(2 * np.pi * self.var)
 
 
-def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600, 
+def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
                  parallel=False, gplvm_type="bayesian", num_inducing=100):
 
     import GPy
@@ -282,7 +287,7 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
         m.X = Param('latent_mean', X0)
         m.link_parameter(m.X, index=0)
 
-        m.X.set_prior(p)        
+        m.X.set_prior(p)
     elif gplvm_type=="basic":
         print "basic GPLVM on full dataset"
         m = GPy.models.GPLVM(sdata.SY, dim, X=XObs, kernel=k)
@@ -290,7 +295,7 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
 
     m.likelihood.variance = sdata.noise_var
     m.likelihood.variance.fix()
-    
+
 
     nmeans = X0.size
     sstep = [0,]
@@ -312,7 +317,7 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
             raise OutOfTimeError
 
         return ll, grad
-    
+
     x0 = m.optimizer_array
     bounds = [(0.0, 1.0),]*nmeans + [(None, None)]*(x0.size-nmeans)
 
@@ -331,6 +336,7 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
 
     with open(os.path.join(d, "finished"), 'w') as f:
         f.write("")
+
 
 
 def do_optimization(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False):
@@ -385,6 +391,25 @@ def do_optimization(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False)
     f_log = open(os.path.join(d, "log.txt"), 'w')
     t0 = time.time()
 
+
+    def lgpll(x):
+        global cachex, cachell, cachegrad
+        if cachex is None or (x != cachex).any():
+            cachex = x
+            cachell, cachegrad = lgpllgrad(x)
+        #else:
+        #    print "cache hit ll"
+        return cachell
+
+    def lgpgrad(x):
+        global cachex, cachell, cachegrad
+        if (x != cachex).any():
+            cachex = x
+            cachell, cachegrad = lgpllgrad(x)
+        #else:
+        #    print "cache hit grad"
+        return cachegrad
+
     def lgpllgrad(x):
 
         xx = x[:len(x0)]
@@ -428,8 +453,18 @@ def do_optimization(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False)
 
     bounds = [(0.0, 1.0),]*len(x0) + [(-10, 5)]*len(c0)
     try:
-        r = scipy.optimize.minimize(lgpllgrad, full0, jac=True, method=method, bounds=bounds)
-        rx = r.x
+
+        if method=="scg":
+            print "optimizating with SCG (WARNING: no bound constraints!)"
+            from scg import SCG
+            f = lgpll
+            gradf = lambda x : lgpllgrad(x)[1]
+            rx, flog, fe, status = SCG(lgpll, lgpgrad, full0)
+            print status
+        else:
+            print "optimizing with %s" % method
+            r = scipy.optimize.minimize(lgpllgrad, full0, jac=True, method=method, bounds=bounds)
+            rx = r.x
     except OutOfTimeError:
         print "terminated optimization for time"
 
@@ -621,7 +656,7 @@ def do_run(d, lscale, n, ntrain, nblocks, yd, seed=0,
 
     if not analyze_only:
         if gplvm_type != "gprf":
-            do_gpy_gplvm(d, gprf, X0, C0, data, method=method, 
+            do_gpy_gplvm(d, gprf, X0, C0, data, method=method,
                          maxsec=maxsec, parallel=parallel,
                          gplvm_type=gplvm_type, num_inducing=num_inducing)
         else:
