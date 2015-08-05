@@ -179,6 +179,10 @@ class SampledData(object):
         return self.X_obs + np.random.randn(*self.X_obs.shape)*jitter_std
 
 
+cachex = None
+cachell = None
+cachegrad = None
+
 def do_optimization(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False):
 
     def cov_prior(c):
@@ -231,6 +235,25 @@ def do_optimization(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False)
     f_log = open(os.path.join(d, "log.txt"), 'w')
     t0 = time.time()
 
+
+    def lgpll(x):
+        global cachex, cachell, cachegrad
+        if cachex is None or (x != cachex).any():
+            cachex = x
+            cachell, cachegrad = lgpllgrad(x)
+        #else:
+        #    print "cache hit ll"
+        return cachell
+
+    def lgpgrad(x):
+        global cachex, cachell, cachegrad
+        if (x != cachex).any():
+            cachex = x
+            cachell, cachegrad = lgpllgrad(x)
+        #else:
+        #    print "cache hit grad"
+        return cachegrad
+
     def lgpllgrad(x):
 
         xx = x[:len(x0)]
@@ -274,8 +297,18 @@ def do_optimization(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False)
 
     bounds = [(0.0, 1.0),]*len(x0) + [(-10, 5)]*len(c0)
     try:
-        r = scipy.optimize.minimize(lgpllgrad, full0, jac=True, method=method, bounds=bounds)
-        rx = r.x
+
+        if method=="scg":
+            print "optimizating with SCG (WARNING: no bound constraints!)"
+            from scg import SCG
+            f = lgpll
+            gradf = lambda x : lgpllgrad(x)[1]
+            rx, flog, fe, status = SCG(lgpll, lgpgrad, full0)
+            print status
+        else:
+            print "optimizing with %s" % method
+            r = scipy.optimize.minimize(lgpllgrad, full0, jac=True, method=method, bounds=bounds)
+            rx = r.x
     except OutOfTimeError:
         print "terminated optimization for time"
 
