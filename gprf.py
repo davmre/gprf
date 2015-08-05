@@ -16,7 +16,7 @@ from treegp.gp import GP, GPCov, mcov,  prior_sample
 
 from treegp.cover_tree import VectorTree
 import pyublas
-
+from gpy_linalg import pdinv, dpotrs
 
 def check_inv(prec, K):
     k1 = np.abs(np.dot(prec[0, :], K[:, 0]) - 1)
@@ -463,9 +463,14 @@ class GPRF(object):
         else:
             K = self.kernel(X, block=block_i)
 
-        prec = np.linalg.inv(K)
-        Alpha = np.dot(prec, Y)
+
+        #prec = np.linalg.inv(K)
+        #Alpha = np.dot(prec, Y)
+        prec, L, Lprec, logdet = pdinv(K)
+        Alpha, _ = dpotrs(L, Y, lower=1)
+
         numerical_error = check_inv(prec, K)
+
         if numerical_error > 1e-4:
             print "numerical failure in gaussian_llgrad, ks %.4f %.4f %.4f %.4f" % (k1, k2, k3, k4)
             ll = -1e10
@@ -479,7 +484,7 @@ class GPRF(object):
             return ll, gradX, gradC
 
         ll = -.5 * np.sum(Y*Alpha)
-        ll += -.5 * dy * np.linalg.slogdet(K)[1]
+        ll += -.5 * dy * logdet #np.linalg.slogdet(K)[1]
         ll += -.5 * dy * n * np.log(2*np.pi)
 
         if grad_X:
