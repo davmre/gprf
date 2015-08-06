@@ -32,7 +32,7 @@ def sample_crazy_shape(seed, n, std=0.005):
             Xs.append(X1)
         return np.vstack(Xs)
 
-    def sample_crazy_lines(n=1000):
+    def sample_crazy_lines(n=1000, std=0.005):
         seg_npts = 250
         segments = n / seg_npts
         segment_len = 41.10960958218894 / np.sqrt(n) # length 1.3 at 1000 pts
@@ -45,7 +45,7 @@ def sample_crazy_shape(seed, n, std=0.005):
                 v /= np.linalg.norm(v)
                 x2 = x1 + v * segment_len
                 if x2[0] > 0 and x2[0] < 1 and x2[1] > 0 and x2[1] < 1:
-                    Xs.append(sample_points_line(seg_npts, x1, x2))
+                    Xs.append(sample_points_line(seg_npts, x1, x2, std=std))
                     break
         return np.vstack(Xs)
 
@@ -94,8 +94,10 @@ def sample_crazy_shape(seed, n, std=0.005):
         return sample_X(n=n)
     elif seed < 1300:
         return sample_diamond(n=n)
+    elif seed < 1350:
+        return sample_crazy_lines(n=n, std=0.005)
     elif seed < 1400:
-        return sample_crazy_lines(n=n)
+        return sample_crazy_lines(n=n, std=0.00005)
 
 
 def sample_synthetic(seed=1, n=400, xd=2, yd=10, lscale=0.1, noise_var=0.01):
@@ -110,7 +112,9 @@ def sample_synthetic(seed=1, n=400, xd=2, yd=10, lscale=0.1, noise_var=0.01):
     cov = GPCov(wfn_params=[1.0], dfn_params=[lscale, lscale], dfn_str="euclidean", wfn_str="se")
     KK = mcov(X, cov, noise_var)
 
-    L = np.linalg.cholesky(KK)
+    from gpy_linalg import jitchol
+    L = jitchol(KK)
+    #L = np.linalg.cholesky(KK)
     Z = np.random.randn(X.shape[0], yd)
     y = np.dot(L, Z)
 

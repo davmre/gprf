@@ -323,7 +323,8 @@ def crazylines_run_params():
     method = "l-bfgs-b"
     ntest  = 500
 
-    ntrains = [5000, 10000, 15000, 20000]
+    #ntrains = [5000, 10000, 15000, 20000]
+    ntrains = [40000, 60000, 80000]
     rpc_sizes = [200, 1000]
     local_dists = [1.0, 0.01]
 
@@ -333,8 +334,10 @@ def crazylines_run_params():
     runs_full = []
 
     for ntrain in ntrains:
-        lscale = 5.4772255750516621 / np.sqrt(ntrain)
-        obs_std = 1.0954451150103324 / np.sqrt(ntrain)
+        #lscale = 5.4772255750516621 / np.sqrt(ntrain)
+        #obs_std = 1.0954451150103324 / np.sqrt(ntrain)
+        lscale = 1.5 / np.sqrt(ntrain)
+        obs_std = 0.3 / np.sqrt(ntrain)
 
         run_params_full = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 0.05, "method": method, 'nblocks': 1, 'task': 'x', 'noise_var': 0.01}
         runs_full.append(run_params_full)
@@ -345,6 +348,39 @@ def crazylines_run_params():
                 runs_gprf.append(run_params_gprf)
 
     return runs_gprf+runs_full
+
+def crazylines_run_gpy_params():
+    yd = 50
+    seed = 1305
+    method = "l-bfgs-b"
+    ntest  = 500
+
+    #ntrains = [5000, 10000, 15000, 20000]
+    ntrains = [40000, 60000, 80000]
+    methods = ["sparse", ]
+    ns_inducing = [1000, 4000, 10000]
+    #rpc_sizes = [200, 1000]
+    #local_dists = [1.0, 0.01]
+
+    x = ntrains
+    runs_gprf = []
+    runs_local = []
+    runs_full = []
+
+    for ntrain in ntrains:
+        #lscale = 5.4772255750516621 / np.sqrt(ntrain)
+        #obs_std = 1.0954451150103324 / np.sqrt(ntrain)
+        lscale = 1.5 / np.sqrt(ntrain)
+        obs_std = 0.3 / np.sqrt(ntrain)
+
+        for gplvm_type in methods:
+            for num_inducing in ns_inducing:
+                if num_inducing > ntrain/2: continue
+                if gplvm_type=="bayesian" and num_inducing > 400: continue
+                run_params_gprf = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed,  "method": method,  'task': 'x', 'noise_var': 0.01, 'gplvm_type': gplvm_type, 'num_inducing': num_inducing}
+                runs_gprf.append(run_params_gprf)
+
+    return runs_gprf
 
 
 
@@ -502,12 +538,14 @@ def gen_runs():
     #runs_xcov = xcov_run_params()
 
     #runs_fault = fault_run_params()
+    runs_lines = crazylines_run_gpy_params()
+    gen_runexp(runs_lines, "python gprfopt.py", "run_lines_gpy_big.sh", analyze=False)
     runs_lines = crazylines_run_params()
-    gen_runexp(runs_lines, "python gprfopt.py", "run_lines.sh", analyze=False)
+    gen_runexp(runs_lines, "python gprfopt.py", "run_lines_big.sh", analyze=False)
     #gen_runexp(runs_lines, "python python/gprf/gprfopt.py", "analyze_lines.sh", analyze=True)
 
-    runs_seismic = seismic_run_params()
-    gen_runexp(runs_seismic, "python run_seismic.py", "run_seismic.sh", analyze=False, maxsec=14400)
+    #runs_seismic = seismic_run_params()
+    #gen_runexp(runs_seismic, "python run_seismic.py", "run_seismic.sh", analyze=False, maxsec=14400)
     #gen_runexp(runs_lines, "python python/bcm/treegp/bcm/bcmopt.py", "analyze_lines.sh", analyze=True)
 
 

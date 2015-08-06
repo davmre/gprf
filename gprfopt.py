@@ -180,86 +180,7 @@ class SampledData(object):
 
 
 
-cachex = None
-cachell = None
-cachegrad = None
-
-from GPy.core.parameterization.priors import Prior
-import weakref
-class GPyConstDiagonalGaussian(Prior):
-    """
-    Implementation of the multivariate Gaussian probability function, coupled with random variables.
-
-    :param mu: mean (N-dimensional array)
-    :param var: covariance matrix (NxN)
-
-    .. Note:: Bishop 2006 notation is used throughout the code
-
-    """
-    from GPy.core.parameterization.domains import _REAL, _POSITIVE
-    domain = _REAL
-    _instances = []
-
-    def __new__(cls, mu=0, var=1):  # Singleton:
-        if cls._instances:
-            cls._instances[:] = [instance for instance in cls._instances if instance()]
-            for instance in cls._instances:
-                if np.all(instance().mu == mu) and np.all(instance().var == var):
-                    return instance()
-        o = super(Prior, cls).__new__(cls, mu, var)
-        cls._instances.append(weakref.ref(o))
-        return cls._instances[-1]()
-
-    def __init__(self, mu, var):
-        self.mu = np.array(mu).flatten()
-        self.var = float(var)
-        self.input_dim = self.mu.size
-        self.inv = 1.0/self.var
-
-        self.constant = -0.5 * self.input_dim * np.log(2 * np.pi * self.var)
-
-
-
-    def summary(self):
-        raise NotImplementedError
-
-
-    def pdf(self, x):
-        return np.exp(self.lnpdf(x))
-
-
-    def lnpdf(self, x):
-        d = x - self.mu
-        return self.constant - 0.5 * np.dot(d, d) * self.inv
-
-
-    def lnpdf_grad(self, x):
-        d = x - self.mu
-        return -d*self.inv
-
-
-    def rvs(self, n):
-        return self.mu + np.random.randn(self.mu.size, n) * np.sqrt(self.var)
-
-
-    def plot(self):
-        import sys
-
-        assert "matplotlib" in sys.modules, "matplotlib package has not been imported."
-        from ..plotting.matplot_dep import priors_plots
-
-        priors_plots.multivariate_plot(self)
-
-    def __getstate__(self):
-        return self.mu, self.var
-
-    def __setstate__(self, state):
-        self.mu = state[0]
-        self.var = float(state[1])
-        self.input_dim = self.mu.size
-        self.inv = 1.0/self.var
-        self.constant = -0.5 * self.input_dim * np.log(2 * np.pi * self.var)
-
+from gpy_shims import GPyConstDiagonalGaussian
 
 def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
                  parallel=False, gplvm_type="bayesian", num_inducing=100):
@@ -318,14 +239,40 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
 
         return ll, grad
 
+    def ll_wrapper(xx):
+        XX = xx[:nmeans].reshape(X0.shape)
+
+        np.save(os.path.join(d, "step_%05d_X.npy" % sstep[0]), XX)
+        ll = m._objective(xx)
+
+        print "%d %.2f %.2f" % (sstep[0], time.time()-t0, ll)
+        f_log.write("%d %.2f %.2f\n" % (sstep[0], time.time()-t0, ll))
+        f_log.flush()
+
+        sstep[0] += 1
+
+        if time.time()-t0 > maxsec:
+            raise OutOfTimeError
+
+        return ll
+        
+    def grad_wrapper(xx):
+        grad = m._grads(xx)
+        return grad
+
     x0 = m.optimizer_array
     bounds = [(0.0, 1.0),]*nmeans + [(None, None)]*(x0.size-nmeans)
 
 
-
     try:
-        r = scipy.optimize.minimize(llgrad_wrapper, x0, jac=True, method=method, bounds=bounds)
-        rx = r.x
+        if method=="scg":
+            print "optimizating with SCG (WARNING: no bound constraints!)"
+            from scg import SCG
+            rx, flog, fe, status = SCG(ll_wrapper, grad_wrapper, x0)
+            print status
+        else:
+            r = scipy.optimize.minimize(llgrad_wrapper, x0, jac=True, method=method, bounds=bounds)
+            rx = r.x
     except OutOfTimeError:
         print "terminated optimization for time"
 
@@ -703,7 +650,7 @@ def build_run_name(args):
         defaults.update(args)
         args = defaults
         ntrain, n, nblocks, lscale, obs_std, local_dist, yd, method, task, init_seed, noise_var, rpc_blocksize, seed, gplvm_type, num_inducing = (args['ntrain'], args['n'], args['nblocks'], args['lscale'], args['obs_std'], args['local_dist'], args['yd'], args['method'], args['task'], args['init_seed'], args['noise_var'], args['rpc_blocksize'], args['seed'], args['gplvm_type'], args['num_inducing'])
-    run_name = "%d_%d_%s_%.2f_%.2f_%.3f_%d_%s_%s_%d_%s_s%s_%s%d" % (ntrain, n, "%d" % nblocks if rpc_blocksize==-1 else "%06d" % rpc_blocksize, lscale, obs_std, local_dist, yd, method, task, init_seed, "%.4f" % noise_var, "%d" % seed, gplvm_type, num_inducing)
+    run_name = "%d_%d_%s_%.4f_%.4f_%.3f_%d_%s_%s_%d_%s_s%s_%s%d" % (ntrain, n, "%d" % nblocks if rpc_blocksize==-1 else "%06d" % rpc_blocksize, lscale, obs_std, local_dist, yd, method, task, init_seed, "%.4f" % noise_var, "%d" % seed, gplvm_type, num_inducing)
     return run_name
 
 def exp_dir(args):
