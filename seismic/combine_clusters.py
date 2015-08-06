@@ -4,7 +4,7 @@ import os
 X = []
 Y = []
 data = []
-for i in range(500):
+for i in range(5000):
     try:
         X.append(np.load("clusters/cluster_%03d_X.npy" % i))
     except IOError:
@@ -12,6 +12,8 @@ for i in range(500):
     Y.append(np.load("clusters/cluster_%03d_Y.npy" % i))
     data.append(np.load("clusters/cluster_%03d_Data.npy" % i))
     print "loaded", i
+
+
 X = np.vstack(X)
 Y = np.vstack(Y)
 data = np.vstack(data)

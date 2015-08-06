@@ -2,6 +2,8 @@ import time
 from sigvisa.utils.geog import dist_km
 import numpy as np
 
+from gprf.seismic.seismic_util import load_events
+
 def xcorr_valid(a,b):
     a = (a - np.mean(a)) / (np.std(a) * np.sqrt(len(a)))
     b = (b - np.mean(b)) / (np.std(b) * np.sqrt(len(a)))
@@ -44,22 +46,6 @@ for(int i=0; i < n; ++i) {
 
 import cPickle as pickle
 
-def load_events(sta="mkar"):
-    s = []
-    for i in range(1, 100):
-        try:
-            with open("/home/dmoore/p_waves/%s_stuff_%d" % (sta, i * 1000), 'rb') as f:
-                ss = pickle.load(f)
-                s += ss
-            print "loaded", i
-        except IOError:
-            with open("/home/dmoore/p_waves/%s_stuff_final" % (sta,), 'rb') as f:
-                ss = pickle.load(f)
-                s += ss
-            print "loaded final"
-            break
-
-    return s
 
 window_start_idx = 60 # 2s before IDC arrival
 window_end_idx = 260 # 8s after IDC arrival (so, 10s window)
@@ -91,7 +77,7 @@ def align(w1, w2):
 
 COL_IDX, COL_EVID, COL_LON, COL_LAT, COL_SMAJ, COL_SMIN, COL_STRIKE, COL_DEPTH, COL_DEPTHERR = np.arange(9)
 def load_seismic_locations():
-    fname = "/home/dmoore/python/sigvisa/scraped.txt"
+    fname = "/home/dmoore/python/gprf/fakescraped.txt"
     return np.loadtxt(fname, delimiter=",")
 
 def extract_patches(waves, window_starts):
@@ -163,7 +149,7 @@ def distances(fds):
     return ds
 
 
-s = load_events()
+
 t = np.linspace(-3.0, 10.0, 301)
 prior = -np.abs(t)/1.0
 
@@ -217,17 +203,23 @@ fd = load_seismic_locations()
 lls = fd[:, [COL_LON, COL_LAT]]
 
 
-
+s = load_events(sta="mkar", basedir="/home/dmoore/mkar_stuff")
 
 from sklearn.cluster import KMeans
 np.random.seed(0)
-km = KMeans(n_clusters=500, init='k-means++', n_init=2, max_iter=300, tol=0.0001, precompute_distances='auto', verbose=1, random_state=None, copy_x=True, n_jobs=1)
+n_clusters = 4000
+km = KMeans(n_clusters=n_clusters, init='k-means++', n_init=2, max_iter=300, tol=0.0001, precompute_distances='auto', verbose=1, random_state=None, copy_x=True, n_jobs=1)
 r = km.fit(lls)
 clusters = []
-for i in range(500):
+for i in range(n_clusters):
     idx = km.labels_==i
     lli =lls[idx,:]
     clusters.append(fd[idx, :])
+
+    if len(lli) > 100:
+        print "cluster", i, "size", len(lli)
+
+
     #c = np.mean(np.std(lli, axis=0))
     #if len(lli) > 50 and c < .25:
     #    print i, len(lli), c

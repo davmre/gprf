@@ -305,11 +305,30 @@ def analyze_run_result(args, gprf):
     fname_X = os.path.join(d, "step_%05d_X.npy" % best_step)
     X = np.load(fname_X)
 
-    gpll, _, _ = gprf.gaussian_llgrad(X, gprf.Y)
+    if X.shape[0] <= 20000:
+        gpll, _, _ = gprf.gaussian_llgrad(X, gprf.Y)
+        print "likelihood under true GP", gpll
+        with open(os.path.join(d, "ll.txt"), 'w') as f:
+            f.write( "likelihood under true GP %f\n" % gpll)
+    else:
+        gpll = block_likelihood(X, gprf)
+        print "likelihood under local GP with 20k blocks", gpll
+        with open(os.path.join(d, "ll.txt"), 'w') as f:
+            f.write( "likelihood under local GP with 20k blocks %f\n" % gpll)
 
-    print "likelihood under true GP", gpll
-    with open(os.path.join(d, "ll.txt"), 'w') as f:
-        f.write( "likelihood under true GP %f\n" % gpll)
+
+def block_likelihood(X, gprf, block_size=20000, seed=0):
+    np.random.seed(seed)
+    n = X.shape[0]
+    p = np.arange(n)
+    CC = cluster_rpc((X, gprf.Y, p), 20000)
+
+    ll = 0
+    for i, (bX, bY, _) in enumerate(CC):
+        bll, _, _ = gprf.gaussian_llgrad(bX, bY)
+        print "likelihood", bll, "for block", i
+        ll+= bll
+    return ll
 
 def main():
 
@@ -321,6 +340,7 @@ def main():
     parser.add_argument('--seed', dest='seed', default=0, type=int)
     parser.add_argument('--maxsec', dest='maxsec', default=3600, type=int)
     parser.add_argument('--analyze', dest='analyze', default=False, action="store_true")
+    parser.add_argument('--analyze_init', dest='analyze_init', default=False, action="store_true")
     parser.add_argument('--rpc_blocksize', dest='rpc_blocksize', default=300, type=int)
     parser.add_argument('--init_cov', dest='init_cov', default="", type=str)
     #parser.add_argument('--prior', dest='prior', default="isc", type=str)
@@ -377,11 +397,18 @@ def main():
     elif task=="cov":
         X0 = None
 
+    if args.analyze_init:
+        ll, _, _ = gprf.gaussian_llgrad(X0, gprf.Y)
+        print "likelihood of initial state under true GP model:", ll
+        import pdb; pdb.set_trace()
+        sys.exit(0)
+
     if not analyze:
         do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=args.maxsec, parallel=args.parallel)
 
     if task=="x":
         analyze_run_result(args, gprf)
+
 
 
 if __name__ == "__main__":
