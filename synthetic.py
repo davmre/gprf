@@ -110,11 +110,12 @@ def sample_synthetic(seed=1, n=400, xd=2, yd=10, lscale=0.1, noise_var=0.01):
         assert(X.shape[0]==n)
 
     cov = GPCov(wfn_params=[1.0], dfn_params=[lscale, lscale], dfn_str="euclidean", wfn_str="se")
-    KK = mcov(X, cov, noise_var)
-    n = KK.shape[0]
 
-    if n <= 40000:
+    if n < 40000:
         from gpy_linalg import jitchol
+        KK = mcov(X, cov, noise_var)
+        n = KK.shape[0]
+
         L = jitchol(KK)
         #L = np.linalg.cholesky(KK)
         Z = np.random.randn(X.shape[0], yd)
@@ -123,10 +124,18 @@ def sample_synthetic(seed=1, n=400, xd=2, yd=10, lscale=0.1, noise_var=0.01):
         import scipy.sparse
         import scikits.sparse
 
-        # attempt sparsity cause nothing else is going to work
-        KK[KK < 1e-10] = 0
-        KKsparse = scipy.sparse.coo_matrix(KK)
+        from treegp.cover_tree import VectorTree
+        import pyublas
 
+        sparse_threshold = 1e-10
+        n = X.shape[0]
+        ptree = VectorTree(X, 1, cov.dfn_str, cov.dfn_params, cov.wfn_str, cov.wfn_params)
+
+        entries = ptree.sparse_training_kernel_matrix(X, 5.0, False)
+        KKsparse = scipy.sparse.coo_matrix((entries[:,2], (entries[:,0], entries[:,1])), shape=(n,n), dtype=float)
+        KKsparse = KKsparse + noise_var * scipy.sparse.eye(n)
+
+        # attempt sparsity cause nothing else is going to work
         factor = scikits.sparse.cholmod.cholesky(KKsparse)
         L = factor.L()
         P = factor.P()
