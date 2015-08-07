@@ -20,7 +20,7 @@ def sample_data(n, ntrain, lscale, obs_std, yd, seed,
                 centers, noise_var, rpc_blocksize=-1):
     sample_basedir = os.path.join(os.environ["HOME"], "gprf_experiments", "synthetic_datasets")
     mkdir_p(sample_basedir)
-    sample_fname = "%d_%d_%.2f_%.3f_%d_%d%s.pkl" % (n, ntrain, lscale, obs_std, yd, seed, "" if noise_var==0.01 else "_%.4f" % noise_var)
+    sample_fname = "%d_%d_%.6f_%.6f_%d_%d%s.pkl" % (n, ntrain, lscale, obs_std, yd, seed, "" if noise_var==0.01 else "_%.4f" % noise_var)
     sample_fname_full = os.path.join(sample_basedir, sample_fname)
 
     try:
@@ -650,7 +650,7 @@ def build_run_name(args):
         defaults.update(args)
         args = defaults
         ntrain, n, nblocks, lscale, obs_std, local_dist, yd, method, task, init_seed, noise_var, rpc_blocksize, seed, gplvm_type, num_inducing = (args['ntrain'], args['n'], args['nblocks'], args['lscale'], args['obs_std'], args['local_dist'], args['yd'], args['method'], args['task'], args['init_seed'], args['noise_var'], args['rpc_blocksize'], args['seed'], args['gplvm_type'], args['num_inducing'])
-    run_name = "%d_%d_%s_%.4f_%.4f_%.3f_%d_%s_%s_%d_%s_s%s_%s%d" % (ntrain, n, "%d" % nblocks if rpc_blocksize==-1 else "%06d" % rpc_blocksize, lscale, obs_std, local_dist, yd, method, task, init_seed, "%.4f" % noise_var, "%d" % seed, gplvm_type, num_inducing)
+    run_name = "%d_%d_%s_%.6f_%.6f_%.4f_%d_%s_%s_%d_%s_s%s_%s%d" % (ntrain, n, "%d" % nblocks if rpc_blocksize==-1 else "%06d" % rpc_blocksize, lscale, obs_std, local_dist, yd, method, task, init_seed, "%.4f" % noise_var, "%d" % seed, gplvm_type, num_inducing)
     return run_name
 
 def exp_dir(args):
