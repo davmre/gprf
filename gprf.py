@@ -3,6 +3,7 @@ import scipy.stats
 
 from collections import defaultdict
 from multiprocessing import Pool
+import multiprocessing
 
 import sys, os
 try:
