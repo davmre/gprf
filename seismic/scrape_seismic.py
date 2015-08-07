@@ -1,28 +1,14 @@
 from datetime import datetime
 import requests
 import os
+import numpy as np
+from gprf.seismic.seismic_util import load_events
 
 class CouldNotScrapeException(Exception):
     pass
 
 import cPickle as pickle
 
-def load_events(sta="mkar"):
-    s = []
-    for i in range(1, 100):
-        try:
-            with open("/home/dmoore/p_waves/%s_stuff_%d" % (sta, i * 1000), 'rb') as f:
-                ss = pickle.load(f)
-                s += ss
-            print "loaded", i
-        except IOError:
-            with open("/home/dmoore/p_waves/%s_stuff_final" % (sta,), 'rb') as f:
-                ss = pickle.load(f)
-                s += ss
-            print "loaded final"
-            break
-
-    return s
 
 
 
@@ -94,16 +80,33 @@ def scrape_isc(ev):
 
     return lon, lat, smaj, smin, strike, depth, depth_err
 
+def fakescrape(ev):
+    # for large datasets it becomes prohibitive to scrape the actual
+    # ISC uncertainty for each event, so instead we return a rough
+    # prior estimate based on the LEB location and the event
+    # magnitude.
+
+    # mb 3: 50km error
+    # mb 4: 25km error
+    # mb 5: 12km error
+    # mb 6: 6km error
+    # mb 2: 100km
+    # mb 1: 200km
+    # mb 0: 400km
+    error_km = 400.0/(np.exp(ev.mb*np.log(2)))
+    return ev.lon, ev.lat, error_km, error_km, 0, ev.depth, error_km
+
 
 from sigvisa.treegp.util import mkdir_p
 mkdir_p("scraped_events")
 
-s = load_events()
+s = load_events(basedir="/home/dmoore/mkar_stuff")
 
-outfile = open("scraped.txt", 'w')
+outfile = open("fakescraped.txt", 'w')
 for i, (ev, (w, srate1)) in enumerate(s):
     try:
-        lon, lat, smaj, smin, strike, depth, depth_err = scrape_isc(ev)
+        #lon, lat, smaj, smin, strike, depth, depth_err = scrape_isc(ev)
+        lon, lat, smaj, smin, strike, depth, depth_err = fakescrape(ev)
     except Exception as e:
         print e
         lon, lat, smaj, smin, strike, depth, depth_err = ev.lon, ev.lat, 20.0, 20.0, 0, ev.depth, 0.05*ev.depth + 1.0

@@ -3,6 +3,7 @@ import scipy.stats
 
 from collections import defaultdict
 from multiprocessing import Pool
+import multiprocessing
 
 import sys, os
 try:
@@ -253,7 +254,7 @@ class GPRF(object):
             neighbor_count = dict([(i, self.n_blocks-1) for i in range(self.n_blocks)])
 
         if parallel:
-            pool = Pool(processes=4)
+            pool = Pool(processes=multiprocessing.cpu_count())
             try:
                 unary_args = [(kwargs, self, i) for i in range(self.n_blocks)]
                 unaries = pool.map_async(llgrad_unary_shim, unary_args).get(9999999)
