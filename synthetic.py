@@ -111,13 +111,27 @@ def sample_synthetic(seed=1, n=400, xd=2, yd=10, lscale=0.1, noise_var=0.01):
 
     cov = GPCov(wfn_params=[1.0], dfn_params=[lscale, lscale], dfn_str="euclidean", wfn_str="se")
     KK = mcov(X, cov, noise_var)
+    n = KK.shape[0]
 
-    from gpy_linalg import jitchol
-    L = jitchol(KK)
-    #L = np.linalg.cholesky(KK)
-    Z = np.random.randn(X.shape[0], yd)
-    y = np.dot(L, Z)
+    if n <= 40000:
+        from gpy_linalg import jitchol
+        L = jitchol(KK)
+        #L = np.linalg.cholesky(KK)
+        Z = np.random.randn(X.shape[0], yd)
+        y = np.dot(L, Z)
+    else:
+        import scipy.sparse
+        import scikits.sparse
 
-    #y = scipy.stats.multivariate_normal(mean=np.zeros((X.shape[0],)), cov=KK).rvs(yd).T.reshape((-1, yd))
+        # attempt sparsity cause nothing else is going to work
+        KK[KK < 1e-10] = 0
+        KKsparse = scipy.sparse.coo_matrix(KK)
+
+        factor = scikits.sparse.cholmod.cholesky(KKsparse)
+        L = factor.L()
+        P = factor.P()
+        Pinv = np.argsort(P)
+        z = np.random.randn(n, yd)
+        y = np.array((L * z)[Pinv])
 
     return X, y, cov
