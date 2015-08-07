@@ -505,8 +505,17 @@ def analyze_run(d, sdata, local_dist=1.0, predict=False):
     else:
         p1 = 0.0
         p2 = 0.0
-    gprf = sdata.build_gprf(X=X, local_dist=local_dist)
-    ll1 = gprf.llgrad()[0]
+
+    results.flush()
+
+    gprf = sdata.build_gprf(X=X, local_dist=local_dist)    
+    ll1 = -np.inf
+    try:
+        if gprf.n_blocks > 1:
+            ll1 = gprf.llgrad()[0]
+    except:
+        pass
+
     s = "trueX inf %.2f %.4f %.4f %.4f %.4f %.4f" % (ll1, c1, l1, l2, p1, p2)
     print s
     results.write(s + "\n")
