@@ -491,7 +491,7 @@ def analyze_run(d, sdata, local_dist=1.0, predict=False):
         else:
             p1 = 0.0
             p2 = 0.0
-        s = "%d %.2f %.2f %.4f %.4f %.4f %.4f %.4f" % (step, times[i], lls[i], c1, l1, l2, p1, p2)
+        s = "%d %.2f %.2f %.8f %.8f %.8f %.4f %.4f" % (step, times[i], lls[i], c1, l1, l2, p1, p2)
         print s
         results.write(s + "\n")
 
