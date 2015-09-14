@@ -82,48 +82,55 @@ class GPyConstDiagonalGaussian(Prior):
         self.input_dim = self.mu.size
         self.inv = 1.0/self.var
         self.constant = -0.5 * self.input_dim * np.log(2 * np.pi * self.var)
-"""
+
 
 from GPy.kern import Matern32
 from treegp.cover_tree import VectorTree
 import pyublas
 class MWrapperLLD(Matern32):
-    def __init__(self, input_dim, variance=1., lengthscale=None, ARD=False, active_dims=None, name='Mat32LLD'):
+    def __init__(self, input_dim, variance=1., lengthscale=None, ARD=False, active_dims=None, name='Mat32LLD', distance_params=None):
+        if distance_params is None:
+            distance_params=np.array([30.0, 30.0,])
         tree_X = np.array([[0.0,] * input_dim,], dtype=float)
-        self.ptree = VectorTree(tree_X, 1, "lld", np.array([???, ???]), 
+        self.ptree = VectorTree(tree_X, 1, "lld", distance_params,
                                 "matern32", np.array([variance,], dtype=np.float))
 
-        super(MWrapper, self).__init__(input_dim, variance, lengthscale, ARD, active_dims, name)
+        super(MWrapperLLD, self).__init__(input_dim, variance, lengthscale, ARD, active_dims, name)
 
 
     def _scaled_dist(self, X, X2=None):
-        if X2 is None:
-            X2 = X
-        K = ptree.kernel_matrix(X, X2, True)
+        XX1 = np.array(X, dtype=np.float64, order="C")
+        if X2 is not None:
+            XX2 = np.array(X2, dtype=np.float64, order="C")
+        else:
+            XX2 = XX1
+        K = self.ptree.kernel_matrix(XX1, XX2, True)
         return K
 
 
-    def gradients_X_(self, dL_dK, X, X2=None):
+    def gradients_X(self, dL_dK, X, X2=None):
         invdist = self._inv_dist(X, X2)
         dL_dr = self.dK_dr_via_X(X, X2) * dL_dK
-        # this is dL_dr, which depends on the Matern part of stuff
-        
-        # now for each r, there is a deriv with respect to entries of X. 
-        
-        tmp = invdist*dL_dr
-        if X2 is None:
-            tmp = tmp + tmp.T
-            X2 = X
 
-        #The high-memory numpy way:
-        #d =  X[:, None, :] - X2[None, :, :]
-        #ret = np.sum(tmp[:,:,None]*d,1)/self.lengthscale**2
-
-        #the lower memory way with a loop
+        sym = True
+        XX1 = np.array(X, dtype=np.float64, order="C")
+        if X2 is not None:
+            XX2 = np.array(X2, dtype=np.float64, order="C")
+            sym = False
+        else:
+            XX2 = XX1
+        # now for each r, there is a deriv with respect to entries of X.
+        dKv = np.zeros((XX2.shape[0],), dtype=np.float)
         ret = np.empty(X.shape, dtype=np.float64)
-        for q in xrange(self.input_dim):
-            np.sum(tmp*(X[:,q][:,None]-X2[:,q][None,:]), axis=1, out=ret[:,q])
-        ret /= self.lengthscale**2
 
+        for p in range(X.shape[0]):
+            for i in range(X.shape[1]):
+                self.ptree.dist_deriv_wrt_xi_row(XX1, XX2, p, i, dKv)
+                if sym:
+                    dKv[p]=0
+                    ret[p, i] = 2*np.sum(dKv * dL_dr[p,:])
+                else:
+                    ret[p, i] = np.sum(dKv * dL_dr[p, :])
+
+        import pdb; pdb.set_trace()
         return ret
-"""
