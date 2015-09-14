@@ -1,18 +1,81 @@
 from datetime import datetime
+import calendar
 import requests
 import os
 import numpy as np
-from gprf.seismic.seismic_util import load_events
+
 
 class CouldNotScrapeException(Exception):
     pass
 
 import cPickle as pickle
 
+TIMESTAMP_COL, TERR_COL, TRMS_COL, LAT_COL, LON_COL, SMAJ_COL, SMIN_COL, STRIKE_COL, DEPTH_COL, DERR_COL, METHOD_COL, SOURCE_COL, ISCID_COL, N_ISC_COLS = range(14)
 
+def ev_from_line(line):
 
+    try:
+        evdate = line[:10]
+        yr = int(evdate[:4])
+        mo = int(evdate[5:7])
+        day = int(evdate[8:])
+        
+        evtime = line[11:22]
+        hr = int(evtime[:2])
+        mn = int(evtime[3:5])
+        ss = float(evtime[6:])
+        s = int(ss)
+        ms = float(ss - s) 
 
-def extract_ev(page):
+        dt = datetime(yr, mo, day, hr, mn, s)
+        ts = calendar.timegm(dt.timetuple()) + ms
+    except Exception as e:
+        print "error parsing time", e
+        ts = -1
+
+    try:
+        time_err = float(line[24:29])
+    except:
+        time_err = -1.0
+    
+    try:
+        time_rms = float(line[30:35])
+    except:
+        time_rms = -1.0
+    
+    lat = float(line[36:44])
+    lon = float(line[45:54])
+
+    try:
+        smaj = float(line[55:60])
+        smin = float(line[61:66])
+        strike = int(line[67:70])
+    except:
+        smaj = 20.0
+        smin = 20.0
+        strike = 0
+    try:
+        depth = float(line[71:76])
+    except:
+        depth = 0.0
+
+    try:
+        depth_err = float(line[78:82])
+    except:
+        depth_err = 0.05*depth + 1.0
+
+    method = line[113]
+
+    source = line[118:127].strip()
+
+    try:
+        iscid = int(line[129:136])
+    except:
+        iscid = -1
+
+    return source, (ts, time_err, time_rms, lon, lat, smaj, smin, strike, depth, depth_err, method, source, iscid)
+
+def extract_ev(page, target_ev=None):
     if "No events were found" in page:
         raise CouldNotScrapeException()
 
@@ -24,34 +87,33 @@ def extract_ev(page):
 
 
         prime_hcenter = -1
-        hcenters = []
+        ev_hcenters = {}
         for line in lines:
             if "PRIME" in line:
                 break
-            if not line.startswith("20"): continue
-            lat = float(line[37:44])
-            lon = float(line[46:54])
-            try:
-                smaj = float(line[56:60])
-                smin = float(line[62:66])
-                strike = int(line[68:70])
-            except:
-                smaj = 20.0
-                smin = 20.0
-                strike = 0
-            depth = float(line[72:76])
-            try:
-                depth_err = float(line[79:82])
-            except:
-                depth_err = 0.05*depth + 1.0
 
-            hcenters.append((lon, lat, smaj, smin, strike, depth, depth_err))
-        if len(hcenters)==0:
+                if target_ev is not None and "IDC" in ev_hcenters and np.abs(ev_hcenters["IDC"][0] - target_ev.lon) > 1e-1:
+                    # if the LEB lon for this event doesn't match the target, keep looking
+                    ev_hcenters = {}                
+                    continue
+                else:
+                    break
+            if not line.startswith("20"): continue
+            try:
+                bulletin, hcenter = ev_from_line(line)
+            except Exception as e:
+                print "error parsing line", line, e
+                import pdb; pdb.set_trace()
+                continue
+                
+            ev_hcenters[bulletin] = hcenter
+
+        if len(ev_hcenters)==0:
             raise CouldNotScrapeException()
         else:
-            return hcenters[prime_hcenter]
+            return ev_hcenters
     except Exception as e:
-        print e
+        print "error scraping", e
         raise CouldNotScrapeException()
 
 def scrape_isc(ev):
@@ -75,10 +137,10 @@ def scrape_isc(ev):
         f.write(url+"\n")
         f.write(page)
 
-    lon, lat, smaj, smin, strike, depth, depth_err = extract_ev(page)
+    hcenters = extract_ev(page, target_ev=ev)
 
 
-    return lon, lat, smaj, smin, strike, depth, depth_err
+    return hcenters
 
 def fakescrape(ev):
     # for large datasets it becomes prohibitive to scrape the actual
@@ -96,21 +158,92 @@ def fakescrape(ev):
     error_km = 400.0/(np.exp(ev.mb*np.log(2)))
     return ev.lon, ev.lat, error_km, error_km, 0, ev.depth, error_km
 
+def oldmain():
+    from gprf.seismic.seismic_util import load_events
+    from sigvisa.treegp.util import mkdir_p
+    mkdir_p("scraped_events")
 
-from sigvisa.treegp.util import mkdir_p
-mkdir_p("scraped_events")
+    s = load_events(basedir="/home/dmoore/mkar_stuff")
 
-s = load_events(basedir="/home/dmoore/mkar_stuff")
+    outfile = open("fakescraped.txt", 'w')
+    for i, (ev, (w, srate1)) in enumerate(s):
+        try:
+            #lon, lat, smaj, smin, strike, depth, depth_err = scrape_isc(ev)
+            lon, lat, smaj, smin, strike, depth, depth_err = fakescrape(ev)
+        except Exception as e:
+            print e
+            lon, lat, smaj, smin, strike, depth, depth_err = ev.lon, ev.lat, 20.0, 20.0, 0, ev.depth, 0.05*ev.depth + 1.0
+        st = "%d, %d, %.4f, %.4f, %.1f, %.1f, %d, %.1f, %.1f" % (i, ev.evid, lon, lat, smaj, smin, strike, depth, depth_err)
+        print st
+        outfile.write(st + "\n")
+        outfile.flush()
 
-outfile = open("fakescraped.txt", 'w')
-for i, (ev, (w, srate1)) in enumerate(s):
-    try:
-        #lon, lat, smaj, smin, strike, depth, depth_err = scrape_isc(ev)
-        lon, lat, smaj, smin, strike, depth, depth_err = fakescrape(ev)
-    except Exception as e:
-        print e
-        lon, lat, smaj, smin, strike, depth, depth_err = ev.lon, ev.lat, 20.0, 20.0, 0, ev.depth, 0.05*ev.depth + 1.0
-    st = "%d, %d, %.4f, %.4f, %.1f, %.1f, %d, %.1f, %.1f" % (i, ev.evid, lon, lat, smaj, smin, strike, depth, depth_err)
-    print st
-    outfile.write(st + "\n")
-    outfile.flush()
+
+def main():
+    from gprf.seismic.seismic_util import load_events
+    from sigvisa.treegp.util import mkdir_p
+
+
+
+    def scrape_ev(i, ev, outfile_errs, outfile_isc, outfile_idc):
+        try:
+            hcenter_dict = scrape_isc(ev)
+        except Exception as e:
+            print "error scraping event", ev.evid, e
+            outfile_errs.write("%d %s\n" % (ev.evid, e))
+            outfile_errs.flush()
+            return
+
+        try:
+            (ts, time_err, time_rms, lon, lat, smaj, smin, strike, depth, depth_err, method, source, iscid) = hcenter_dict['ISC']
+
+            st = "%d, %d, %.2f, %.3f, %.4f, %.4f, %.1f, %.1f, %d, %.1f, %.1f" % (i, ev.evid, ts, time_err, lon, lat, smaj, smin, strike, depth, depth_err)
+            print source, st
+            outfile_isc.write(st + "\n")
+            outfile_isc.flush()
+        except Exception as e:
+            print "ISC error", e
+
+
+        try:
+            (ts, time_err, time_rms, lon, lat, smaj, smin, strike, depth, depth_err, method, source, iscid) = hcenter_dict['IDC']
+
+            st = "%d, %d, %.2f, %.3f, %.4f, %.4f, %.1f, %.1f, %d, %.1f, %.1f" % (i, ev.evid, ts, time_err, lon, lat, smaj, smin, strike, depth, depth_err)
+            print source, st
+            outfile_idc.write(st + "\n")
+            outfile_idc.flush()
+        except Exception as e:
+            print "IDC error", e
+
+
+        try:
+            with open("scraped_events/full/%d.txt" % ev.evid, 'w') as f:
+                f.write(repr(hcenter_dict))
+        except Exception as e:
+            print "repr error", e
+
+    mkdir_p("scraped_events")
+    mkdir_p("scraped_events/full/")
+    outfile_errs = open("scraped_events/scrape_errors.txt", 'a')
+    outfile_isc = open("scraped_events/isc.txt", 'a')
+    outfile_idc = open("scraped_events/idc.txt", 'a')
+
+    basedir="/home/dmoore/mkar_stuff"
+    sta="mkar"
+    start_bin = 1
+    end_bin = 204
+    for i in range(start_bin, end_bin):
+        fname = os.path.join(basedir, "%s_stuff_%d" % (sta, i * 1000))
+        with open(fname, 'rb') as f:
+            ss = pickle.load(f)
+            print "loaded", fname
+            for i, (ev, (w, srate1)) in enumerate(ss):
+                scrape_ev(i, ev, outfile_errs, outfile_isc, outfile_idc)
+
+    outfile_idc.close()
+    outfile_isc.close()
+    outfile_errs.close()
+
+
+if __name__=="__main__":
+    main()
