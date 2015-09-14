@@ -285,6 +285,9 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
         f.write("")
 
 
+cachex = None
+cachell = None
+cachegrad = None
 
 def do_optimization(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False):
 
