@@ -180,7 +180,7 @@ class SampledData(object):
 
 
 
-from gpy_shims import GPyConstDiagonalGaussian
+from gpy_shims import GPyConstDiagonalGaussian, MWrapperLLD
 
 def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
                  parallel=False, gplvm_type="bayesian", num_inducing=100):
@@ -189,7 +189,8 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
 
     dim = sdata.SX.shape[1]
     # adjust kernel lengthscale to match GPy's defn of the RBF kernel incl a -.5 factor
-    k = GPy.kern.RBF(dim, ARD=0, lengthscale=np.sqrt(.5)*sdata.lscale, variance=1.0)
+    #k = GPy.kern.RBF(dim, ARD=0, lengthscale=np.sqrt(.5)*sdata.lscale, variance=1.0)
+    k = MWrapperLLD(dim, ARD=0, variance=1.0, distance_params=np.array([30.0, 30.0,]))
     k.lengthscale.fix()
     k.variance.fix()
 
@@ -208,11 +209,11 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
         m.X = Param('latent_mean', X0)
         m.link_parameter(m.X, index=0)
 
-        m.X.set_prior(p)
+        #m.X.set_prior(p)
     elif gplvm_type=="basic":
         print "basic GPLVM on full dataset"
         m = GPy.models.GPLVM(sdata.SY, dim, X=XObs, kernel=k)
-        m.X.set_prior(p)
+        #m.X.set_prior(p)
 
     m.likelihood.variance = sdata.noise_var
     m.likelihood.variance.fix()
@@ -255,7 +256,7 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
             raise OutOfTimeError
 
         return ll
-        
+
     def grad_wrapper(xx):
         grad = m._grads(xx)
         return grad
@@ -263,6 +264,7 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
     x0 = m.optimizer_array
     bounds = [(0.0, 1.0),]*nmeans + [(None, None)]*(x0.size-nmeans)
 
+    import pdb; pdb.set_trace()
 
     try:
         if method=="scg":
