@@ -20,7 +20,7 @@ def sample_data(n, ntrain, lscale, obs_std, yd, seed,
                 centers, noise_var, rpc_blocksize=-1):
     sample_basedir = os.path.join(os.environ["HOME"], "gprf_experiments", "synthetic_datasets")
     mkdir_p(sample_basedir)
-    sample_fname = "%d_%d_%.2f_%.3f_%d_%d%s.pkl" % (n, ntrain, lscale, obs_std, yd, seed, "" if noise_var==0.01 else "_%.4f" % noise_var)
+    sample_fname = "%d_%d_%.6f_%.6f_%d_%d%s.pkl" % (n, ntrain, lscale, obs_std, yd, seed, "" if noise_var==0.01 else "_%.4f" % noise_var)
     sample_fname_full = os.path.join(sample_basedir, sample_fname)
 
     try:
@@ -287,6 +287,9 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
         f.write("")
 
 
+cachex = None
+cachell = None
+cachegrad = None
 
 def do_optimization(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False):
 
@@ -493,7 +496,7 @@ def analyze_run(d, sdata, local_dist=1.0, predict=False):
         else:
             p1 = 0.0
             p2 = 0.0
-        s = "%d %.2f %.2f %.4f %.4f %.4f %.4f %.4f" % (step, times[i], lls[i], c1, l1, l2, p1, p2)
+        s = "%d %.2f %.2f %.8f %.8f %.8f %.4f %.4f" % (step, times[i], lls[i], c1, l1, l2, p1, p2)
         print s
         results.write(s + "\n")
 
@@ -507,8 +510,17 @@ def analyze_run(d, sdata, local_dist=1.0, predict=False):
     else:
         p1 = 0.0
         p2 = 0.0
-    gprf = sdata.build_gprf(X=X, local_dist=local_dist)
-    ll1 = gprf.llgrad()[0]
+
+    results.flush()
+
+    gprf = sdata.build_gprf(X=X, local_dist=local_dist)    
+    ll1 = -np.inf
+    try:
+        if gprf.n_blocks > 1:
+            ll1 = gprf.llgrad()[0]
+    except:
+        pass
+
     s = "trueX inf %.2f %.4f %.4f %.4f %.4f %.4f" % (ll1, c1, l1, l2, p1, p2)
     print s
     results.write(s + "\n")
@@ -652,7 +664,7 @@ def build_run_name(args):
         defaults.update(args)
         args = defaults
         ntrain, n, nblocks, lscale, obs_std, local_dist, yd, method, task, init_seed, noise_var, rpc_blocksize, seed, gplvm_type, num_inducing = (args['ntrain'], args['n'], args['nblocks'], args['lscale'], args['obs_std'], args['local_dist'], args['yd'], args['method'], args['task'], args['init_seed'], args['noise_var'], args['rpc_blocksize'], args['seed'], args['gplvm_type'], args['num_inducing'])
-    run_name = "%d_%d_%s_%.4f_%.4f_%.3f_%d_%s_%s_%d_%s_s%s_%s%d" % (ntrain, n, "%d" % nblocks if rpc_blocksize==-1 else "%06d" % rpc_blocksize, lscale, obs_std, local_dist, yd, method, task, init_seed, "%.4f" % noise_var, "%d" % seed, gplvm_type, num_inducing)
+    run_name = "%d_%d_%s_%.6f_%.6f_%.4f_%d_%s_%s_%d_%s_s%s_%s%d" % (ntrain, n, "%d" % nblocks if rpc_blocksize==-1 else "%06d" % rpc_blocksize, lscale, obs_std, local_dist, yd, method, task, init_seed, "%.4f" % noise_var, "%d" % seed, gplvm_type, num_inducing)
     return run_name
 
 def exp_dir(args):
