@@ -20,6 +20,9 @@ import pyublas
 from gpy_linalg import pdinv, dpotrs
 
 def check_inv(prec, K):
+    if K.shape[0] < 2:
+        return 0.0
+
     k1 = np.abs(np.dot(prec[0, :], K[:, 0]) - 1)
     k2 = np.abs(np.dot(prec[0, :], K[:, 1]))
     k3 = np.abs(np.dot(prec[1, :], K[:, 0]))
@@ -37,41 +40,48 @@ class Blocker(object):
         dists = [np.linalg.norm(X_new - center) for center in self.block_centers]
         return np.argmin(dists)
 
-    def sort_by_block(self, X, Y=None, YY=None):
-        if Y is not None:
-            assert(Y.shape[0] == X.shape[0])
-        elif YY is not None:
-            assert(YY.shape[0] == X.shape[0])
-            assert(YY.shape[1] == X.shape[0])
+    def block_clusters(self, X):
+        dists = pair_distances(X, self.block_centers)
+        blocks = np.argmin(dists, axis=1)
+        idxs = []
+        all_idxs = np.arange(len(X))
+        for i in range(self.n_blocks):
+            block_idxs = all_idxs[blocks == i]
+            idxs.append(block_idxs)
 
-        n = X.shape[0]
-        blocks = np.array([self.get_block(xp) for xp in X])
-        idxs = np.arange(n)
-        perm = np.asarray(sorted(idxs, key = lambda i : blocks[i]))
-        sorted_X = X[perm]
-        sorted_blocks = blocks[perm]
-        block_idxs = [idxs[sorted_blocks==block] for block in np.arange(self.n_blocks)]
-        block_boundaries = [ (np.min(bi), np.max(bi)+1)  for bi in block_idxs  ]
+        return idxs
 
-        if Y is not None:
-            sorted_Y = Y[perm]
-            return sorted_X, sorted_Y, perm, block_boundaries
-        elif YY is not None:
-            tmp = YY[perm]
-            sorted_YY = tmp[:, perm]
-            return sorted_X, sorted_YY, perm, block_boundaries
-        else:
-            return sorted_X, perm, block_boundaries
+    def neighbors(self, diag_connections=True):
+        neighbors = []
 
+        center_distances = pair_distances(self.block_centers, self.block_centers)
+        cc = center_distances.flatten()
+        cc = cc[cc > 0]
+        min_dist = np.min(cc) + 1e-6
+        diag_dist = np.min(cc[cc > min_dist]) + 1e-6
+        connect_dist = diag_dist if diag_connections else min_dist
+
+        for i in range(self.n_blocks):
+            for j in range(i):
+                if center_distances[i,j] < connect_dist:
+                    neighbors.append((i,j))
+        return neighbors
 
 def pair_distances(Xi, Xj):
     return np.sqrt(np.outer(np.sum(Xi**2, axis=1), np.ones((Xj.shape[0]),)) - 2*np.dot(Xi, Xj.T) + np.outer((np.ones(Xi.shape[0]),), np.sum(Xj**2, axis=1)))
 
+def symmetrize_neighbors(neighbors):
+    ndict = defaultdict(set)
+    for (i, j) in neighbors:
+        ndict[i].add(j)
+        ndict[j].add(i)
+    return ndict
+
 class GPRF(object):
 
-    def __init__(self, X, Y, block_boundaries, cov, noise_var, kernelized=False, dy=None,
+    def __init__(self, X, Y, block_fn, cov, noise_var, kernelized=False, dy=None,
                  neighbor_threshold=1e-3, nonstationary=False, nonstationary_prec=False,
-                 block_centers=None, diag_connections=False):
+                 block_idxs=None, neighbors=None):
         self.X = X
 
         if kernelized:
@@ -82,8 +92,11 @@ class GPRF(object):
         else:
             self.kernelized = False
             self.Y = Y
-        self.block_boundaries = block_boundaries
-        self.n_blocks = len(block_boundaries)
+        if block_idxs is None:
+            block_idxs = block_fn(X)
+        self.block_idxs = block_idxs
+        self.block_fn = block_fn
+        self.n_blocks = len(block_idxs)
 
         self.nonstationary = nonstationary
         if not nonstationary:
@@ -99,91 +112,51 @@ class GPRF(object):
             self.block_trees = [predict_tree for i in range(self.n_blocks)]
             self.nonstationary_prec=nonstationary_prec
 
-        if block_centers is not None:
-            self.block_neighbors(block_centers, diag=diag_connections)
+        if neighbors is not None:
+            self.neighbors = neighbors
         else:
             self.compute_neighbors(threshold=neighbor_threshold)
+        self.compute_neighbor_count()
+        self.neighbor_dict = symmetrize_neighbors(self.neighbors)
         self.neighbor_threshold = neighbor_threshold
 
-    def block_neighbors(self, centers, diag=False, threshold=1e-3):
-        neighbor_count = defaultdict(int)
-        neighbors = []
+    def compute_neighbors(self, threshold=1e-3):
 
-        if threshold < 1e-8:
-            self.neighbor_count = neighbor_count
-            self.neighbors = neighbors
-            return
-
-        center_distances = pair_distances(centers, centers)
-        min_dist = np.min(center_distances) + 1e-6
-        diag_dist = np.min(center_distances[center_distances > min_dist]) + 1e-6
-        connect_dist = diag_dist if diag else min_dist
-
-        for i in range(self.n_blocks):
-            for j in range(i):
-                if center_distances[i,j] < connect_dist:
-                    neighbors.append((i,j))
-                    neighbor_count[i] += 1
-                    neighbor_count[j] += 1
-
-        self.neighbor_count = neighbor_count
-        self.neighbors = neighbors
-
-    def compute_neighbors(self, threshold=1e-3, threshold_Q=False):
-        neighbor_count = defaultdict(int)
         neighbors = []
 
         if threshold == 1.0:
-            self.neighbor_count = neighbor_count
             self.neighbors = neighbors
             return
-
-
-        #D = pair_distances(self.X, self.X)
-
 
         wfn_var = self.cov.wfn_params[0]
 
         for i in range(self.n_blocks):
-            i_start, i_end = self.block_boundaries[i]
-            X1 = self.X[i_start:i_end]
+            idxs = self.block_idxs[i]
+            #i_start, i_end = self.block_boundaries[i]
+            X1 = self.X[idxs]
             for j in range(i):
-                j_start, j_end = self.block_boundaries[j]
-                X2 = self.X[j_start:j_end]
+                #j_start, j_end = self.block_boundaries[j]
+                jdxs = self.block_idxs[j]
+                X2 = self.X[jdxs]
 
-                if threshold_Q:
-                    ni = i_end-i_start
-                    nj - j_end-j_start
-                    n = ni+nj
-                    K = np.empty((n,n))
-                    K[:i_end, :i_end] = self.kernel(X1)/wfn_var
-                    K[i_end:, i:end] = self.kernel(X2)/wfn_var
-                    K[:i_end, i_end:] = self.kernel(X1, X2=X2)/wfn_var
-                    K[i_end:, :i_end] = K[:i_end, i_end:].T
-                    Q = np.linalg.inv(K)
-                    Qij = Q[:i_start, i_start:]
-                    maxk = np.max(np.abs(Qij))
-                else:
-                    Kij = self.kernel(X1, X2=X2)/wfn_var
-                    maxk = np.max(np.abs(Kij))
+                Kij = self.kernel(X1, X2=X2)/wfn_var
+                maxk = np.max(np.abs(Kij))
 
                 if maxk > threshold:
                     neighbors.append((i,j))
-                    neighbor_count[i] += 1
-                    neighbor_count[j] += 1
 
-                # use a distance-based threshold instead of
-                # kernel-based to eliminate complications of
-                # nonstationary kernels.
-                #
-                #Dij = D[i_start:i_end, j_start:j_end]
-                #mind = np.min(Dij)
-            if i % 10 == 0:
-                print "%d: neighbors count %d" % (i, neighbor_count[i])
-        self.neighbor_count = neighbor_count
         self.neighbors = neighbors
         print "total pairs %d" % len(self.neighbors)
 
+    def compute_neighbor_count(self):
+        neighbor_count = defaultdict(int)
+        for (i,j) in self.neighbors:
+            neighbor_count[i] += 1
+            neighbor_count[j] += 1
+            if i % 10 == 0:
+                print "%d: neighbors count %d" % (i, neighbor_count[i])
+        self.neighbor_count = neighbor_count
+                
 
     def update_covs(self, covs):
         if not self.nonstationary:
@@ -208,38 +181,16 @@ class GPRF(object):
             self.block_trees = block_trees
             self.block_covs = block_covs
 
-    def update_X(self, new_X, recompute_neighbors=False):
+    def update_X(self, new_X, update_blocks=True, recompute_neighbors=False):
         self.X = new_X
+        self.block_idxs = self.block_fn(new_X)
         if recompute_neighbors:
             self.compute_neighbors(threshold=self.neighbor_threshold)
 
-    def llgrad_blocked(self, parallel=False, **kwargs):
-        """
-        Compute likelihood under a model with blocked local GPs (no pairwise corrections)
-        """
-        if parallel:
-            pool = Pool(processes=4)
-            unary_args = [(kwargs, self, i) for i in range(self.n_blocks)]
-            unaries = pool.map(llgrad_unary_shim, unary_args)
-            pool.close()
-            pool.join()
-        else:
-            unaries = [self.llgrad_unary(i, **kwargs) for i in range(self.n_blocks)]
-
-        unary_lls, unary_gradX, unary_gradCov = zip(*unaries)
-
-        ll = np.sum(unary_lls)
-
-        if "grad_X" in kwargs and kwargs['grad_X']:
-            grads = np.zeros(self.X.shape)
-        else:
-            grads = np.zeros((0, 0))
-
-        for i in range(self.n_blocks):
-            i_start, i_end = self.block_boundaries[i]
-            grads[i_start:i_end, :] += unary_grads[i]
-
-        return ll, grads
+    def update_X_block(self, i, new_X):
+        #i_start, i_end = self.block_boundaries[i]
+        idxs = self.block_idxs[i]
+        self.X[idxs] = new_X
 
     def llgrad(self, parallel=False, local=True, **kwargs):
         # overall likelihood is the pairwise potentials for all (unordered) pairs,
@@ -297,15 +248,18 @@ class GPRF(object):
             gradX = np.zeros(self.X.shape)
             pair_idx = 0
             for i in range(self.n_blocks):
-                i_start, i_end = self.block_boundaries[i]
-                gradX[i_start:i_end, :] -= (neighbor_count[i]-1)*unary_gradX[i]
+                #i_start, i_end = self.block_boundaries[i]
+                idxs = self.block_idxs[i]
+                gradX[idxs, :] -= (neighbor_count[i]-1)*unary_gradX[i]
 
             for pair_idx, (i,j) in enumerate(neighbors):
-                i_start, i_end = self.block_boundaries[i]
-                j_start, j_end = self.block_boundaries[j]
-                ni = i_end-i_start
-                gradX[i_start:i_end] += pair_gradX[pair_idx][:ni]
-                gradX[j_start:j_end] += pair_gradX[pair_idx][ni:]
+                idxs = self.block_idxs[i]
+                jdxs = self.block_idxs[j]
+                #i_start, i_end = self.block_boundaries[i]
+                #j_start, j_end = self.block_boundaries[j]
+                ni = len(idxs)
+                gradX[idxs] += pair_gradX[pair_idx][:ni]
+                gradX[jdxs] += pair_gradX[pair_idx][ni:]
         else:
             gradX = np.zeros((0, 0))
 
@@ -330,27 +284,48 @@ class GPRF(object):
 
         return ll, gradX, gradCov
 
+    def llgrad_blanket(self, i, **kwargs):
+        # compute the terms of the objective corresponding to the Markov 
+        # blanket of block i. Optimizing these terms with respect to X_i
+        # is a coordinate ascent step on the full objective.
+        idxs = self.block_idxs[i]
+        n_block = len(idxs)
+
+        # ignore gradCov return value since it's nonsensical to
+        # optimize global covariance hparams over local blankets
+        ll, gradX, _ = self.llgrad_unary(i, **kwargs)
+        ll *= (1-self.neighbor_count[i])
+        gradX *= (1-self.neighbor_count[i])
+
+        for j in self.neighbor_dict[i]:
+            pll, pgX, _ = self.llgrad_joint(i, j, **kwargs)
+            ll += pll
+            gradX += pgX[:n_block]
+        return ll, gradX
 
     def llgrad_unary(self, i, **kwargs):
-        i_start, i_end = self.block_boundaries[i]
-        X = self.X[i_start:i_end]
-
+        idxs = self.block_idxs[i]
+        X = self.X[idxs]
+        #print "unary %d size %d" % (i, len(idxs))
 
         if self.nonstationary:
             kwargs['block_i'] = i
 
         if self.kernelized:
-            YY = self.YY[i_start:i_end, i_start:i_end]
+            YY = self.YY[idxs][:, idxs] #[i_start:i_end, i_start:i_end]
             return self.gaussian_llgrad_kernel(X, YY, dy=self.dy, **kwargs)
         else:
-            Y = self.Y[i_start:i_end, :]
+            Y = self.Y[idxs]
             return self.gaussian_llgrad(X, Y, **kwargs)
 
     def llgrad_joint(self, i, j, **kwargs):
-        i_start, i_end = self.block_boundaries[i]
-        j_start, j_end = self.block_boundaries[j]
-        Xi = self.X[i_start:i_end]
-        Xj = self.X[j_start:j_end]
+        #i_start, i_end = self.block_boundaries[i]
+        #j_start, j_end = self.block_boundaries[j]
+        idxs = self.block_idxs[i]
+        jdxs = self.block_idxs[j]
+        #print "joint %d %d  size %d %d" % (i, j, len(idxs), len(jdxs))
+        Xi = self.X[idxs]
+        Xj = self.X[jdxs]
 
         ni = Xi.shape[0]
         nj = Xj.shape[0]
@@ -362,6 +337,7 @@ class GPRF(object):
 
 
         if self.kernelized:
+            raise Exception("need to fix indices for kernelized joint llgrad")
             YY = np.empty((ni+nj, ni+nj))
             YY[:ni, :ni] = self.YY[i_start:i_end, i_start:i_end]
             YY[ni:, ni:] = self.YY[j_start:j_end, j_start:j_end]
@@ -369,8 +345,8 @@ class GPRF(object):
             YY[ni:, :ni]  = YY[:ni, ni:].T
             return self.gaussian_llgrad_kernel(X, YY, dy=self.dy, **kwargs)
         else:
-            Yi = self.Y[i_start:i_end, :]
-            Yj = self.Y[j_start:j_end, :]
+            Yi = self.Y[idxs]
+            Yj = self.Y[jdxs]
             Y = np.vstack([Yi, Yj])
             return self.gaussian_llgrad(X, Y, **kwargs)
 
@@ -433,11 +409,20 @@ class GPRF(object):
 
         t0 = time.time()
         n, dx = X.shape
+
         dy = Y.shape[1]
 
 
-        gradX = np.array(())
-        gradC = np.array(())
+        gradX = np.zeros(())
+        gradC = np.zeros(())
+
+        if n==0:
+            if grad_X:
+                gradX = np.zeros(X.shape)
+            if grad_cov:
+                ncov = 2 + len(self.cov.dfn_params)
+                gradC = np.zeros((ncov,))
+            return 0.0, gradX, gradC
 
         # if we're nonstationary by adding precision matrices (symmetrizing BCM predictions),
         # just average the two results
@@ -470,6 +455,7 @@ class GPRF(object):
         prec, L, Lprec, logdet = pdinv(K)
         Alpha, _ = dpotrs(L, Y, lower=1)
 
+        """
         numerical_error = check_inv(prec, K)
 
         if numerical_error > 1e-4:
@@ -483,6 +469,7 @@ class GPRF(object):
                 gradC = -np.ones((ncov,))
 
             return ll, gradX, gradC
+        """
 
         ll = -.5 * np.sum(Y*Alpha)
         ll += -.5 * dy * logdet #np.linalg.slogdet(K)[1]
@@ -565,9 +552,10 @@ class GPRF(object):
         block_Kinvs = []
         block_Alphas = []
         for i in range(self.n_blocks):
-            i_start, i_end = self.block_boundaries[i]
-            X = self.X[i_start:i_end]
-            blockY = Y[i_start:i_end]
+            #i_start, i_end = self.block_boundaries[i]
+            idxs = self.block_idxs[i]
+            X = self.X[idxs]
+            blockY = Y[idxs]
             K = self.kernel(X, block = i if self.nonstationary else None)
             Kinv = np.linalg.inv(K)
             Alpha = np.dot(Kinv, blockY)
@@ -582,16 +570,27 @@ class GPRF(object):
 
             prior_mean = np.zeros((Xstar.shape[0], Y.shape[1]))
 
+            test_block_idxs = self.block_fn(Xstar)
+
+            """
             if local:
-                nearest = np.argmin([np.min(pair_distances(Xstar, self.X[i_start:i_end])) for (i_start, i_end) in self.block_boundaries])
+                nearest = np.argmin([np.min(pair_distances(Xstar, self.X[idxs])) for idxs in self.block_idxs])
                 neighbors = [nearest,]
             else:
                 neighbors = range(self.n_blocks)
+            """
+            source_blocks = set()
+            for i, idxs in enumerate(test_block_idxs):
+                if len(idxs) == 0: continue
 
-            for i in neighbors:
+                source_blocks.add(i)
+                for j in self.neighbor_dict[i]:
+                    source_blocks.add(j)
 
-                i_start, i_end = self.block_boundaries[i]
-                X = self.X[i_start:i_end]
+            for i in source_blocks:
+
+                idxs = self.block_idxs[i]
+                X = self.X[idxs]
 
                 ptree = self.block_trees[i] if self.nonstationary else self.predict_tree
                 nv = self.block_covs[i][0] if self.nonstationary else self.noise_var
@@ -630,6 +629,8 @@ class GPRF(object):
         K = self.kernel(X)
         Kinv = np.linalg.inv(K)
         prec = Kinv
+
+        """
         numerical_error = check_inv(prec, K)
         if numerical_error > 1e-4:
             print "numerical failure in gaussian_llgrad, ks %.4f %.4f %.4f %.4f" % (k1, k2, k3, k4)
@@ -642,6 +643,7 @@ class GPRF(object):
                 gradC = -np.ones((ncov,))
 
             return ll, gradX, gradC
+        """
 
         KYYK = np.dot(np.dot(Kinv, YY), Kinv)
 

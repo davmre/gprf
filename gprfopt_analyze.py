@@ -1,5 +1,5 @@
 from gprf import GPRF, Blocker
-from gprfopt import SampledData, exp_dir, dump_covs
+from gprfopt import SampledData, exp_dir, dump_covs, grid_centers
 
 from treegp.gp import GPCov, GP, mcov, prior_sample, dgaussian
 from treegp.util import mkdir_p
@@ -79,7 +79,7 @@ def load_plot_data(runs, target="predll", running_best=True):
 
     return plot_data
 
-def vis_points(run=None, d=None, sdata_file=None, y_target=0, seed=None, blocksize=None):
+def vis_points(run=None, d=None, sdata_file=None, y_target=0, seed=None, blocksize=None, highlight_block=None):
 
     if d is None:
         d = exp_dir(run)
@@ -110,15 +110,18 @@ def vis_points(run=None, d=None, sdata_file=None, y_target=0, seed=None, blocksi
                 np.random.seed(seed)
                 sdata.cluster_rpc(blocksize)
             else:
-                pmax = np.ceil(np.sqrt(blocksize))*2+1
-                pts = np.linspace(0, 1, pmax)[1::2]
-                centers = [np.array((xx, yy)) for xx in pts for yy in pts]
+                centers = grid_centers(blocksize)
                 sdata.set_centers(centers)
 
             cmap ="prism"
-            block_colors = np.linspace(0.0, 1.0, len(sdata.block_boundaries))
-            for i, (i_start, i_end) in enumerate(sdata.block_boundaries):
-                c[i_start:i_end] = block_colors[i]
+            if highlight_block is not None:
+                block_colors = np.ones(( len(sdata.block_idxs),)) * 0.4
+                block_colors[highlight_block] = 0.0
+            else:
+                block_colors = np.linspace(0.0, 1.0, len(sdata.block_idxs))
+            block_idxs = sdata.reblock(X)
+            for i, idxs in enumerate(block_idxs):
+                c[idxs] = block_colors[i]
 
             #c = np.sqrt(np.sum((X - sdata.SX)**2, axis=1))
         elif sdata_file is None:
@@ -128,6 +131,8 @@ def vis_points(run=None, d=None, sdata_file=None, y_target=0, seed=None, blocksi
             sargs['vmin'] = -3.0
             sargs['vmax'] = 3.0
         ax.scatter(X[:, 0], X[:, 1], alpha=0.4, c=c, cmap=cmap, s=25, marker='.', linewidths=0.0, **sargs)
+        ax.set_xlim((0,1))
+        ax.set_ylim((0,1))
 
         canvas = FigureCanvasAgg(fig)
 
@@ -135,6 +140,15 @@ def vis_points(run=None, d=None, sdata_file=None, y_target=0, seed=None, blocksi
         fig.savefig(out_name)
         print "wrote", out_name
 
+    print "generating movie...:"
+    cmd = "avconv -f image2 -r 5 -i step_%05d_X.png -qscale 28 gprf.mp4".split(" ")
+    import subprocess
+    p = subprocess.Popen(cmd, cwd=d)
+    p.wait()
+    print "copying to ~/public_html/gprf.mp4"
+    p = subprocess.Popen(["cp", "gprf.mp4", "/home/dmoore/public_html/"], cwd=d)
+    p.wait()
+    print "done"
 
 
 def write_plot(plot_data, out_fname, xlabel="Time (s)",
@@ -577,12 +591,15 @@ def main():
         y_target = -1
         seed = None
         blocksize = None
+        highlight_block = None
         if len(sys.argv) > 4:
             y_target = int(sys.argv[4])
             if len(sys.argv) > 5:
                 seed = int(sys.argv[5])
                 blocksize = int(sys.argv[6])
-        vis_points(d=sys.argv[2], y_target=y_target, sdata_file=sys.argv[3], seed=seed, blocksize=blocksize)
+            if len(sys.argv) > 7:
+                highlight_block = int(sys.argv[7])
+        vis_points(d=sys.argv[2], y_target=y_target, sdata_file=sys.argv[3], seed=seed, blocksize=blocksize, highlight_block=highlight_block)
     else:
         gen_runs()
 
