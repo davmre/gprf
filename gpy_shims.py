@@ -84,6 +84,7 @@ class GPyConstDiagonalGaussian(Prior):
         self.constant = -0.5 * self.input_dim * np.log(2 * np.pi * self.var)
 
 
+"""
 from GPy.kern import Matern32
 from treegp.cover_tree import VectorTree
 import pyublas
@@ -134,3 +135,4 @@ class MWrapperLLD(Matern32):
 
         import pdb; pdb.set_trace()
         return ret
+"""

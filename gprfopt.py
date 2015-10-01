@@ -16,31 +16,6 @@ import argparse
 EXP_DIR = os.path.join(os.environ["HOME"], "gprf_experiments")
 
 
-def sample_data(n, ntrain, lscale, obs_std, yd, seed,
-                centers, noise_var, rpc_blocksize=-1):
-    sample_basedir = os.path.join(os.environ["HOME"], "gprf_experiments", "synthetic_datasets")
-    mkdir_p(sample_basedir)
-    sample_fname = "%d_%d_%.6f_%.6f_%d_%d%s.pkl" % (n, ntrain, lscale, obs_std, yd, seed, "" if noise_var==0.01 else "_%.4f" % noise_var)
-    sample_fname_full = os.path.join(sample_basedir, sample_fname)
-
-    try:
-        with open(sample_fname_full, 'rb') as f:
-            sdata = pickle.load(f)
-    except IOError:
-        sdata = SampledData(n=n, ntrain=ntrain, lscale=lscale, obs_std=obs_std, seed=seed, yd=yd, noise_var=noise_var)
-
-        with open(sample_fname_full, 'wb') as f:
-            pickle.dump(sdata, f)
-
-    if centers is not None:
-        sdata.set_centers(centers)
-    else:
-        np.random.seed(seed)
-        sdata.cluster_rpc(rpc_blocksize)
-    return sdata
-
-class OutOfTimeError(Exception):
-    pass
 
 
 class SampledData(object):
@@ -115,7 +90,7 @@ class SampledData(object):
     def lscale_error(self, FC):
         true_lscale = self.cov.dfn_params[0]
         inferred_lscale = FC[0, 2]
-        return np.abs(inferred_lscale-true_lscale)/true_lscale
+        return inferred_lscale/true_lscale
 
     def prediction_error_gp(self, x):
         XX = x.reshape(self.X_obs.shape)
@@ -174,7 +149,7 @@ class SampledData(object):
                 ll_marginal += gaussian_ll(yt, m, c)
                 se_marginal += np.sum((yt-m)**2)
             """
-            PM, PC = p_local(Xt, test_noise_var=self.noise_var)
+            PM, PC = p(Xt, test_noise_var=self.noise_var)
             ll_block += gaussian_ll(Yt, PM, PC)
             ll_block_diag += gaussian_ll(Yt, PM, np.diag(np.diag(PC)))
             se_block += np.sum((Yt-PM)**2)
@@ -226,8 +201,33 @@ class SampledData(object):
         return self.X_obs + np.random.randn(*self.X_obs.shape)*jitter_std
 
 
+def sample_data(n, ntrain, lscale, obs_std, yd, seed,
+                centers, noise_var, rpc_blocksize=-1):
+    sample_basedir = os.path.join(os.environ["HOME"], "gprf_experiments", "synthetic_datasets")
+    mkdir_p(sample_basedir)
+    sample_fname = "%d_%d_%.6f_%.6f_%d_%d%s.pkl" % (n, ntrain, lscale, obs_std, yd, seed, "" if noise_var==0.01 else "_%.4f" % noise_var)
+    sample_fname_full = os.path.join(sample_basedir, sample_fname)
 
-from gpy_shims import GPyConstDiagonalGaussian, MWrapperLLD
+    try:
+        with open(sample_fname_full, 'rb') as f:
+            sdata = pickle.load(f)
+    except IOError:
+        sdata = SampledData(n=n, ntrain=ntrain, lscale=lscale, obs_std=obs_std, seed=seed, yd=yd, noise_var=noise_var)
+
+        with open(sample_fname_full, 'wb') as f:
+            pickle.dump(sdata, f)
+
+    if centers is not None:
+        sdata.set_centers(centers)
+    else:
+        np.random.seed(seed)
+        sdata.cluster_rpc(rpc_blocksize)
+    return sdata
+
+class OutOfTimeError(Exception):
+    pass
+
+from gpy_shims import GPyConstDiagonalGaussian
 
 def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
                  parallel=False, gplvm_type="bayesian", num_inducing=100):
@@ -236,8 +236,8 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
 
     dim = sdata.SX.shape[1]
     # adjust kernel lengthscale to match GPy's defn of the RBF kernel incl a -.5 factor
-    #k = GPy.kern.RBF(dim, ARD=0, lengthscale=np.sqrt(.5)*sdata.lscale, variance=1.0)
-    k = MWrapperLLD(dim, ARD=0, variance=1.0, distance_params=np.array([30.0, 30.0,]))
+    k = GPy.kern.RBF(dim, ARD=0, lengthscale=np.sqrt(.5)*sdata.lscale, variance=1.0)
+    #k = MWrapperLLD(dim, ARD=0, variance=1.0, distance_params=np.array([30.0, 30.0,]))
     k.lengthscale.fix()
     k.variance.fix()
 
@@ -318,7 +318,7 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
             rx, flog, fe, status = SCG(ll_wrapper, grad_wrapper, x0)
             print status
         else:
-            r = scipy.optimize.minimize(llgrad_wrapper, x0, jac=True, method=method, bounds=bounds)
+            r = scipy.optimize.minimize(llgrad_wrapper, x0, jac=True, method=method, bounds=bounds, options = {"ftol": 1e-6, "maxiter": 200})
             rx = r.x
     except OutOfTimeError:
         print "terminated optimization for time"
@@ -461,7 +461,7 @@ def do_optimization(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False)
             print status
         else:
             print "optimizing with %s" % method
-            r = scipy.optimize.minimize(lgpllgrad, full0, jac=True, method=method, bounds=bounds)
+            r = scipy.optimize.minimize(lgpllgrad, full0, jac=True, method=method, bounds=bounds, options={"ftol": 1e-6, "maxiter": 200})
             rx = r.x
     except OutOfTimeError:
         print "terminated optimization for time"
@@ -618,12 +618,14 @@ def analyze_run(d, sdata, local_dist=1.0, predict=False):
         c1 = sdata.lscale_error(FC) if FC is not None else 0.00
         l2 = sdata.x_prior(X.flatten())[0]
         if predict:
-            p1 = sdata.prediction_error_bcm(X=X, cov=FC, local_dist=1.0)
-            p2 = sdata.prediction_error_bcm(X=X, cov=FC, marginal=True)
+            smse_local, msll_local_block, msll_local_diag = sdata.prediction_error(X=X, cov=FC, local_dist=1.0)
+            if local_dist < 1.0:
+                smse, msll_block, msll_diag = sdata.prediction_error(X=X, cov=FC, local_dist=local_dist)
+            else:
+                smse, msll_block, msll_diag = smse_local, msll_local_block, msll_local_diag
         else:
-            p1 = 0.0
-            p2 = 0.0
-        s = "%d %.2f %.2f %.8f %.8f %.8f %.4f %.4f" % (step, times[i], lls[i], c1, l1, l2, p1, p2)
+            smse, smse_local, msll_local_block, msll_block, msll_local_diag, msll_diag = 0., 0., 0., 0., 0., 0.
+        s = "%d %.2f %.2f %.8f %.8f %.8f %.4f %.4f %.4f %.4f %.4f %.4f" % (step, times[i], lls[i], c1, l1, l2, smse_local, smse, msll_local_block, msll_block, msll_local_diag, msll_diag)
         print s
         results.write(s + "\n")
 
@@ -632,11 +634,13 @@ def analyze_run(d, sdata, local_dist=1.0, predict=False):
     c1 = 0.0
     l2 = sdata.x_prior(X.flatten())[0]
     if predict:
-        p1 = sdata.prediction_error_bcm(X=X, cov=None, local_dist=1.0)
-        p2 = sdata.prediction_error_bcm(X=X, cov=None, marginal=True)
+        smse_local, msll_local_block, msll_local_diag = sdata.prediction_error(X=X, cov=None, local_dist=1.0)
+        if local_dist < 1.0:
+            smse, msll_block, msll_diag = sdata.prediction_error(X=X, cov=None, local_dist = local_dist)
+        else:
+            smse, msll_block, msll_diag = smse_local, msll_local_block, msll_local_diag
     else:
-        p1 = 0.0
-        p2 = 0.0
+        smse, smse_local, msll_local_block, msll_block, msll_local_diag, msll_diag = 0., 0., 0., 0., 0., 0.
 
     results.flush()
 
@@ -648,7 +652,7 @@ def analyze_run(d, sdata, local_dist=1.0, predict=False):
     except:
         pass
 
-    s = "trueX inf %.2f %.4f %.4f %.4f %.4f %.4f" % (ll1, c1, l1, l2, p1, p2)
+    s = "trueX inf %.2f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f" % (ll1, c1, l1, l2, smse_local, smse, msll_local_block, msll_block, msll_local_diag, msll_diag)
     print s
     results.write(s + "\n")
     results.close()

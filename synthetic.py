@@ -127,11 +127,10 @@ def sample_synthetic(seed=1, n=400, xd=2, yd=10, lscale=0.1, noise_var=0.01):
         from treegp.cover_tree import VectorTree
         import pyublas
 
-        sparse_threshold = 1e-10
         n = X.shape[0]
         ptree = VectorTree(X, 1, cov.dfn_str, cov.dfn_params, cov.wfn_str, cov.wfn_params)
 
-        entries = ptree.sparse_training_kernel_matrix(X, 5.0, False)
+        entries = ptree.sparse_training_kernel_matrix(X, 4.0, False)
         KKsparse = scipy.sparse.coo_matrix((entries[:,2], (entries[:,0], entries[:,1])), shape=(n,n), dtype=float)
         KKsparse = KKsparse + noise_var * scipy.sparse.eye(n)
 

@@ -18,7 +18,8 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 
 RESULT_COLS = {'step': 0, 'time': 1, 'mll': 2, 'dlscale': 3, 'mad': 4,
-               'xprior': 5, 'predll': 6, 'predll_neighbors': 7}
+               'xprior': 5, 'smse_local': 6, 'smse': 7, 'msll_local_block': 8,
+               'msll_block': 9, 'msll_local_diag': 10, 'msll_diag': 11}
 
 def plot_ll(run_name):
     steps, times, lls = load_log(run_name)
@@ -60,7 +61,7 @@ def load_final_results(d):
         r_true = read_result_line(lines[-1])
     return r_final, r_true
 
-def load_plot_data(runs, target="predll", running_best=True):
+def load_plot_data(runs, target="msll_diag", running_best=True):
 
     col = RESULT_COLS[target]
 
@@ -365,6 +366,70 @@ def crazylines_run_params():
 
     return runs_gprf+runs_full
 
+
+def grid_run_params():
+    yd = 50
+    seed = 0
+    method = "l-bfgs-b"
+    ntest  = 500
+
+    #ntrains = [5000, 10000, 15000, 20000]
+    ntrains = [10000, 20000, 30000, 40000, 60000, 80000]
+    block_size_min = 200
+    block_size_max_local = 4000
+    block_size_max_gprf = 1000
+    
+    local_block_size = [200, 400, 800, 2000, 4000]
+    gprf_block_size = [200, 400, 800]
+
+    ns_inducing = [1000, 2000, 4000, 10000]
+
+    def square_up(n):
+        return int(np.ceil(np.sqrt(n)))
+    def square_down(n):
+        return int(np.floor(np.sqrt(n)))    
+    def get_nblocks(ntrain, block_size_target):
+        return square_down(ntrain / float(block_size_target))**2
+
+
+    runs = []
+
+    for ntrain in ntrains:
+        runs_gprf = []
+        runs_local = []
+        runs_fitc = []
+
+        #lscale = 5.4772255750516621 / np.sqrt(ntrain)
+        #obs_std = 1.0954451150103324 / np.sqrt(ntrain)
+        lscale = 6.12 / np.sqrt(ntrain)
+        obs_std = 2.45 / np.sqrt(ntrain)
+
+        for blocksize in local_block_size:
+            nblocks = get_nblocks(ntrain, blocksize)
+            actual_blocksize = ntrain / float(nblocks)
+            if actual_blocksize >= 8000: continue
+            print ntrain, "target", blocksize, "actual", actual_blocksize
+            run_params_local = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 1.0, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01} 
+            runs_local.append(run_params_local)
+
+        for blocksize in gprf_block_size:
+            nblocks = get_nblocks(ntrain, blocksize)
+            run_params_gprf = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 0.1, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01} 
+            runs_gprf.append(run_params_gprf)
+
+        for num_inducing in ns_inducing:
+            if num_inducing > ntrain/4.5:
+                continue
+            run_params_inducing = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed,  "method": method,  'task': 'x', 'noise_var': 0.01, 'gplvm_type': "sparse", 'num_inducing': num_inducing}
+            runs_fitc.append(run_params_inducing)
+        runs += runs_local
+        runs += runs_gprf
+        runs += runs_fitc
+
+
+    return runs
+
+
 def crazylines_run_gpy_params():
     yd = 50
     seed = 1355
@@ -375,6 +440,7 @@ def crazylines_run_gpy_params():
     ntrains = [20000, 30000, 40000, ]
     methods = ["sparse", ]
     ns_inducing = [1000, 2000, 4000, 10000]
+
     #rpc_sizes = [200, 1000]
     #local_dists = [1.0, 0.01]
 
@@ -553,6 +619,9 @@ def gen_runs():
 
     #runs_cov = cov_run_params_hard()
     #runs_xcov = xcov_run_params()
+
+    runs_grid = grid_run_params()
+    gen_runexp(runs_grid, "python gprfopt.py", "run_grid_big.sh", analyze=False, maxsec=18000, parallel=False)
 
     #runs_fault = fault_run_params()
     runs_lines = crazylines_run_gpy_params()

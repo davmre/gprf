@@ -54,6 +54,9 @@ class Blocker(object):
     def neighbors(self, diag_connections=True):
         neighbors = []
 
+        if len(self.block_centers) <= 1:
+            return []
+
         center_distances = pair_distances(self.block_centers, self.block_centers)
         cc = center_distances.flatten()
         cc = cc[cc > 0]
@@ -153,8 +156,6 @@ class GPRF(object):
         for (i,j) in self.neighbors:
             neighbor_count[i] += 1
             neighbor_count[j] += 1
-            if i % 10 == 0:
-                print "%d: neighbors count %d" % (i, neighbor_count[i])
         self.neighbor_count = neighbor_count
                 
 
