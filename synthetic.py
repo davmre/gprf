@@ -100,16 +100,8 @@ def sample_crazy_shape(seed, n, std=0.005):
         return sample_crazy_lines(n=n, std=0.00005)
 
 
-def sample_synthetic(seed=1, n=400, xd=2, yd=10, lscale=0.1, noise_var=0.01):
-    # sample data from the prior
-    if seed < 1000:
-        np.random.seed(seed)
-        X = np.random.rand(n, xd)
-    else:
-        X = sample_crazy_shape(seed, n)
-        assert(X.shape[0]==n)
-
-    cov = GPCov(wfn_params=[1.0], dfn_params=[lscale, lscale], dfn_str="euclidean", wfn_str="se")
+def sample_y(X, cov, noise_var, yd, sparse_lscales=4.0):
+    n = X.shape[0]
 
     if n < 40000:
         from gpy_linalg import jitchol
@@ -130,7 +122,7 @@ def sample_synthetic(seed=1, n=400, xd=2, yd=10, lscale=0.1, noise_var=0.01):
         n = X.shape[0]
         ptree = VectorTree(X, 1, cov.dfn_str, cov.dfn_params, cov.wfn_str, cov.wfn_params)
 
-        entries = ptree.sparse_training_kernel_matrix(X, 4.0, False)
+        entries = ptree.sparse_training_kernel_matrix(X, sparse_lscales, False)
         KKsparse = scipy.sparse.coo_matrix((entries[:,2], (entries[:,0], entries[:,1])), shape=(n,n), dtype=float)
         KKsparse = KKsparse + noise_var * scipy.sparse.eye(n)
 
@@ -141,5 +133,20 @@ def sample_synthetic(seed=1, n=400, xd=2, yd=10, lscale=0.1, noise_var=0.01):
         Pinv = np.argsort(P)
         z = np.random.randn(n, yd)
         y = np.array((L * z)[Pinv])
+    return y
+
+def sample_synthetic(seed=1, n=400, xd=2, yd=10, lscale=0.1, noise_var=0.01):
+    # sample data from the prior
+    
+    if seed < 1000:
+        np.random.seed(seed)
+        X = np.random.rand(n, xd)
+    else:
+        X = sample_crazy_shape(seed, n)
+        assert(X.shape[0]==n)
+
+    cov = GPCov(wfn_params=[1.0], dfn_params=[lscale, lscale], dfn_str="euclidean", wfn_str="se")
+
+    y = sample_y(X, cov, noise_var, yd)
 
     return X, y, cov

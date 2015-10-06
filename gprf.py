@@ -134,6 +134,7 @@ class GPRF(object):
         wfn_var = self.cov.wfn_params[0]
 
         for i in range(self.n_blocks):
+            print "computing neighbors for block", i
             idxs = self.block_idxs[i]
             #i_start, i_end = self.block_boundaries[i]
             X1 = self.X[idxs]
@@ -184,7 +185,8 @@ class GPRF(object):
 
     def update_X(self, new_X, update_blocks=True, recompute_neighbors=False):
         self.X = new_X
-        self.block_idxs = self.block_fn(new_X)
+        if self.block_fn is not None:
+            self.block_idxs = self.block_fn(new_X)
         if recompute_neighbors:
             self.compute_neighbors(threshold=self.neighbor_threshold)
 
@@ -320,6 +322,7 @@ class GPRF(object):
             return self.gaussian_llgrad(X, Y, **kwargs)
 
     def llgrad_joint(self, i, j, **kwargs):
+
         #i_start, i_end = self.block_boundaries[i]
         #j_start, j_end = self.block_boundaries[j]
         idxs = self.block_idxs[i]

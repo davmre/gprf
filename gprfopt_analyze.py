@@ -15,7 +15,7 @@ import cPickle as pickle
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
-
+from collections import defaultdict
 
 RESULT_COLS = {'step': 0, 'time': 1, 'mll': 2, 'dlscale': 3, 'mad': 4,
                'xprior': 5, 'smse_local': 6, 'smse': 7, 'msll_local_block': 8,
@@ -394,6 +394,8 @@ def grid_run_params():
 
     runs = []
 
+    runs_by_key = defaultdict(list)
+
     for ntrain in ntrains:
         runs_gprf = []
         runs_local = []
@@ -409,25 +411,34 @@ def grid_run_params():
             actual_blocksize = ntrain / float(nblocks)
             if actual_blocksize >= 8000: continue
             print ntrain, "target", blocksize, "actual", actual_blocksize
-            run_params_local = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 1.0, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01} 
+            run_params_local = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 1.0, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0} 
             runs_local.append(run_params_local)
+
+            key = "Local-%d" % blocksize
+            runs_by_key[key].append(run_params_local)
 
         for blocksize in gprf_block_size:
             nblocks = get_nblocks(ntrain, blocksize)
-            run_params_gprf = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 0.1, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01} 
+            run_params_gprf = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 0.1, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0} 
             runs_gprf.append(run_params_gprf)
+
+            key = "GPRF-%d" % blocksize
+            runs_by_key[key].append(run_params_gprf)
 
         for num_inducing in ns_inducing:
             if num_inducing > ntrain/4.5:
                 continue
-            run_params_inducing = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed,  "method": method,  'task': 'x', 'noise_var': 0.01, 'gplvm_type': "sparse", 'num_inducing': num_inducing}
+            run_params_inducing = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed,  "method": method,  'task': 'x', 'noise_var': 0.01, 'gplvm_type': "sparse", 'num_inducing': num_inducing, "nblocks": 1, "local_dist": 1.0}
             runs_fitc.append(run_params_inducing)
+            key = "FITC-%d" % num_inducing
+            runs_by_key[key].append(run_params_inducing)
+
         runs += runs_local
         runs += runs_gprf
         runs += runs_fitc
 
 
-    return runs
+    return runs, runs_by_key
 
 
 def crazylines_run_gpy_params():
@@ -467,9 +478,9 @@ def crazylines_run_gpy_params():
 
 
 
-def plot_models_growing():
+def plot_grid_growing():
 
-    runs_gprf, runs_local, runs_full = growing_run_params()
+    _, runs_by_key = grid_run_params()
 
     times_local = []
     times_gprf = []
@@ -483,49 +494,48 @@ def plot_models_growing():
     predll_true_local = []
     predll_true_gprf = []
     predll_true_full = []
-    ntrains = []
+    ntrains = set()
 
-    for (gprf, local, full) in zip(runs_gprf, runs_local, runs_full):
+    pd_mad = {}
+    pd_smse = {}
+    pd_msll = {}
 
-        ntrains.append(gprf['ntrain'])
+    for k, runs in runs_by_key.items():
 
-        def process(stuff, times, mads, predlls, predlls_true):
-            d = exp_dir(stuff)
-            r = load_results(d)
-            if len(r) == 0:
-                times.append(0)
-                mads.append(0)
-                predlls.append(0)
-                predlls_true.append(0)
-                return
+        pts_mad = []
+        pts_msll = []
+        pts_smse = []
+        for run in runs:
+            d = exp_dir(run)
+            try:
+                r = load_results(d)
+                fr, tr = load_final_results(d)
+            except IndexError:
+                print "warning: could not load results for ", d
+                continue
+            except IOError:
+                print "warning: no results file for ", d
+                continue
+            ntrain = run["ntrain"]
+            mad, smse, msll = fr["mad"], fr["smse_local"], fr["msll_local_diag"]
+            scaled_mad = mad / run['lscale']
+            pts_mad.append((ntrain, scaled_mad))
+            if smse > 0.0:
+                pts_smse.append((ntrain, smse))
+                pts_msll.append((ntrain, msll))
+        if len(pts_mad) > 0:
+            pd_mad[k] = zip(*pts_mad)
+        if len(pts_smse) > 0:
+            pd_smse[k] = zip(*pts_smse)
+            pd_msll[k] = zip(*pts_msll)
 
-            times.append(np.mean(np.diff(r[:, 1])))
-            fr, tr = load_final_results(d)
-            mads.append(fr['mad'])
-            predlls.append(fr['predll'])
-            predlls_true.append(tr['predll'])
 
-        process(gprf, times_gprf, mad_gprf, predll_gprf, predll_true_gprf)
-        process(local, times_local, mad_local, predll_local, predll_true_local)
-        process(full, times_full, mad_full, predll_full, predll_true_full)
-
-    pd_times = {'GPRF': (ntrains, times_gprf),
-                'Local': (ntrains, times_local),
-                "GP": (ntrains, times_full)}
-    pd_mad = {'GPRF': (ntrains, mad_gprf),
-                'Local': (ntrains, mad_local),
-                "GP": (ntrains, mad_full)}
-    pd_predll = {'GPRF': (ntrains, predll_gprf),
-                'Local': (ntrains, predll_local),
-                 "GP": (ntrains, predll_full)}
-    pd_predll_true = {'GPRF': (ntrains, predll_true_gprf),
-                'Local': (ntrains, predll_true_local),
-                      "GP": (ntrains, predll_true_full)}
-
-    write_plot(pd_times, "times.png", xlabel="n", ylabel="gradient evaluation time (s)")
-    write_plot(pd_mad, "mad.png", xlabel="n", ylabel="X locations: mean absolute deviation")
-    write_plot(pd_predll, "predll.png", xlabel="n", ylabel="test MSLL")
-    write_plot(pd_predll_true, "predll_true.png", xlabel="n", ylabel="test MSLL from true X")
+    #write_plot(pd_times, "times.png", xlabel="n", ylabel="gradient evaluation time (s)")
+    write_plot(pd_mad, "mad.png", xlabel="n", ylabel="X locations: mean absolute deviation", ylim=(0, 0.1))
+    write_plot(pd_smse, "smse.png", xlabel="n", ylabel="test SMSE", ylim=(0, 0.1))
+    write_plot(pd_msll, "msll.png", xlabel="n", ylabel="test MSLL", ylim=(0, 2.5))
+    #write_plot(pd_predll, "predll.png", xlabel="n", ylabel="test MSLL")
+    #write_plot(pd_predll_true, "predll_true.png", xlabel="n", ylabel="test MSLL from true X")
 
 def cov_run_params_hard():
 
@@ -590,7 +600,7 @@ def cov_run_params():
     return runs
 
 
-def gen_runexp(runs, base_cmd, outfile, analyze=False, parallel=True, maxsec=5400):
+def gen_runexp(runs, base_cmd, outfile, tail="", analyze=False, parallel=True, maxsec=5400):
 
     f_out = open(outfile, 'w')
 
@@ -598,36 +608,41 @@ def gen_runexp(runs, base_cmd, outfile, analyze=False, parallel=True, maxsec=540
         args = ["--%s=%s" % (k,v) for (k,v) in sorted(run.items(), key=lambda x: x[0]) ]
         if analyze:
             args.append("--analyze")
+            args.append("--analyze_full")
         if parallel:
             args.append("--parallel")
         if 'maxsec' not in run and maxsec is not None:
             args.append("--maxsec=%d" % maxsec)
         cmd = base_cmd + " " + " ".join(args)
-        f_out.write(cmd + "\n")
+        f_out.write(cmd + tail + "\n")
 
     f_out.close()
 
 def gen_runs():
     #runs_cov = cov_run_params()
-    runs_fixedsize = fixedsize_run_params(lscale=0.1, obs_std=0.02, rpc_cluster=True).values()
-    gen_runexp(runs_fixedsize, "python gprfopt.py", "run_fixedsize.sh", analyze=False)
-    runs_fixedsize = fixedsize_run_params(lscale=0.1, obs_std=0.02).values()
-    gen_runexp(runs_fixedsize, "python gprfopt.py", "run_fixedsize_blocks.sh", analyze=False)
+    #runs_fixedsize = fixedsize_run_params(lscale=0.1, obs_std=0.02, rpc_cluster=True).values()
+    #gen_runexp(runs_fixedsize, "python gprfopt.py", "run_fixedsize.sh", analyze=False)
+    #runs_fixedsize = fixedsize_run_params(lscale=0.1, obs_std=0.02).values()
+    #gen_runexp(runs_fixedsize, "python gprfopt.py", "run_fixedsize_blocks.sh", analyze=False)
     #plot_models_fixedsize(lscale=0.1, obs_std=0.02)
 
     #runs_growing = np.concatenate(growing_run_params())
 
     #runs_cov = cov_run_params_hard()
     #runs_xcov = xcov_run_params()
+    cloud_base = "sudo su -c \"bash /home/sigvisa/python/gprf/run_cloud.sh"
+    cloud_tail = "\" sigvisa"
 
-    runs_grid = grid_run_params()
-    gen_runexp(runs_grid, "python gprfopt.py", "run_grid_big.sh", analyze=False, maxsec=18000, parallel=False)
+    #runs_grid = grid_run_params()
+    #gen_runexp(runs_grid, cloud_base, "run_grid_cloud_analyze.sh", analyze=True, maxsec=21600, parallel=False, tail=cloud_tail)
+
+    plot_grid_growing()
 
     #runs_fault = fault_run_params()
-    runs_lines = crazylines_run_gpy_params()
-    gen_runexp(runs_lines, "python gprfopt.py", "run_lines_gpy_big.sh", analyze=False, maxsec=10800)
-    runs_lines = crazylines_run_params()
-    gen_runexp(runs_lines, "python gprfopt.py", "run_lines_big.sh", analyze=False, maxsec=10800)
+    #runs_lines = crazylines_run_gpy_params()
+    #gen_runexp(runs_lines, "python gprfopt.py", "run_lines_gpy_big.sh", analyze=False, maxsec=10800)
+    #runs_lines = crazylines_run_params()
+    #gen_runexp(runs_lines, "python gprfopt.py", "run_lines_big.sh", analyze=False, maxsec=10800)
     #gen_runexp(runs_lines, "python python/gprf/gprfopt.py", "analyze_lines.sh", analyze=True)
 
     #runs_seismic = seismic_run_params()

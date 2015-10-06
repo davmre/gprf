@@ -1,7 +1,10 @@
 from gprf import GPRF, Blocker
-from gprfopt import cluster_rpc, sort_by_cluster, OutOfTimeError, load_log
+from gprfopt import cluster_rpc, OutOfTimeError, load_log
+from seismic.seismic_util import scraped_to_evid_dict
+from kdtree_clustering import tree_neighbors, kdtree_cluster, clusters_from_splits
+from synthetic import sample_y
 
-from treegp.gp import GPCov, GP, mcov, prior_sample, dgaussian
+from treegp.gp import GPCov, GP, mcov, prior_sample, dgaussian, sort_morton
 from treegp.util import mkdir_p
 import numpy as np
 import scipy.stats
@@ -59,9 +62,8 @@ def dist_km(loc1, loc2):
 
     return d
 
-COL_IDX, COL_EVID, COL_LON, COL_LAT, COL_SMAJ, COL_SMIN, COL_STRIKE, COL_DEPTH, COL_DEPTHERR = np.arange(9)
-
-
+#COL_IDX, COL_EVID, COL_LON, COL_LAT, COL_SMAJ, COL_SMIN, COL_STRIKE, COL_DEPTH, COL_DEPTHERR = np.arange(9)
+COL_TIME, COL_TIMEERR, COL_LON, COL_LAT, COL_SMAJ, COL_SMIN, COL_STRIKE, COL_DEPTH, COL_DEPTHERR = np.arange(9)
 
 def load_seismic_locations():
     fname = os.path.join(os.environ['HOME'],"aligned_data.npy")
@@ -100,8 +102,8 @@ def load_kernel(fname, sd):
     return myK
 
 def cov_prior(c):
-    means = np.array((-5.5, -5.5, 2, 2))
-    std = 1.0
+    means = np.array((-2.3, 0.0, 3.6, 3.6))
+    std = 1.5
 
     r = (c-means)/std
     ll = -.5*np.sum( r**2)- .5 *len(c) * np.log(2*np.pi*std**2)
@@ -111,6 +113,9 @@ def cov_prior(c):
 def do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=3600, parallel=False):
     gradX = (X0 is not None)
     gradC = (C0 is not None)
+
+    depth_scale = 100
+    X0[:, 2] /= depth_scale
 
     if gradX:
         x0 = X0.flatten()
@@ -130,29 +135,37 @@ def do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=3600, parallel=F
     cfname = os.path.join(d, "covs.txt")
     covf = open(cfname, 'w')
 
+
+
     def lgpllgrad(x):
 
         xx = x[:len(x0)]
         xc = x[len(x0):]
 
+        XX = xx.reshape(X0.shape).copy()
+        XX[:, 2] *= depth_scale
         if gradX:
-            XX = xx.reshape(X0.shape)
             gprf.update_X(XX)
             np.save(os.path.join(d, "step_%05d_X.npy" % sstep[0]), XX)
         if gradC:
             FC = np.exp(xc.reshape(C0.shape))
-            print FC
             gprf.update_covs(FC)
             np.save(os.path.join(d, "step_%05d_cov.npy" % sstep[0]), FC)
 
         ll, gX, gC = gprf.llgrad(local=True, grad_X=gradX, grad_cov=gradC,
                                        parallel=parallel)
-        print "grad", gC
+        
+        gX[:, 2] *= depth_scale
+
+        gXl = np.linalg.norm(gX[:, 0])
+        gXd = np.linalg.norm(gX[:, 2])
+        print "gradient norm lon %f, depth %f" % (gXl, gXd)
 
         if gradX:
-            prior_ll, prior_grad = x_prior(xx)
+            prior_ll, prior_grad = x_prior(XX)
+            prior_grad[:, 2] *= depth_scale
             ll += prior_ll
-            gX = gX.flatten() + prior_grad
+            gX = gX.flatten() + prior_grad.flatten()
         if gradC:
             prior_ll, prior_grad = cov_prior(xc)
             ll += prior_ll
@@ -160,7 +173,11 @@ def do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=3600, parallel=F
 
         grad = np.concatenate([gX.flatten(), gC.flatten()])
 
-        print "%d %.2f %.2f" % (sstep[0], time.time()-t0, ll)
+        print "%d %.2f %.2f" % (sstep[0], time.time()-t0, ll),
+        if gradC:
+            print FC
+        else:
+            print
         f_log.write("%d %.2f %.2f\n" % (sstep[0], time.time()-t0, ll))
         f_log.flush()
 
@@ -192,6 +209,16 @@ def do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=3600, parallel=F
         f.write("")
 
 
+def get_idc_as_sd():
+    homedir = os.getenv("HOME")
+    idc_dict = scraped_to_evid_dict(os.path.join(homedir, "python/gprf/idc.txt"))
+    isc_dict = scraped_to_evid_dict(os.path.join(homedir, "python/gprf/isc.txt"))
+
+    sd = []
+    for evid in isc.keys():
+        sd.append(idc_dict[evid])
+    return sd
+        
 def build_prior(sd):
 
     def azimuth_vector(azi_deg):
@@ -256,42 +283,58 @@ def build_prior(sd):
         cov[:2, :2] = uncertainty_to_cov(row[COL_SMAJ], row[COL_SMIN], row[COL_STRIKE], row[COL_LAT])
 
         deptherr = row[COL_DEPTHERR]
-        if deptherr < 1.0:
-            deptherr = 1.0
+        if deptherr <= 20.0:
+            deptherr = 40.0
+        #if row[COL_DEPTH] == 0:
+        #    print deptherr
         cov[2,2] = conf_to_var(deptherr)
 
-        cov *= 4
+        #cov *= 4
         covs.append(cov)
     means = np.array(means)
 
     precs = [np.linalg.inv(cov) for cov in covs]
     logdets = [np.linalg.slogdet(cov)[1] for cov in covs]
 
-    def event_prior_llgrad(x):
-        X = x.reshape(means.shape)
+    def event_prior_llgrad(X):
         R = X - means
+        rlons = R[:, 0]
+        R[:, 0] = ((rlons + 180) % 360) - 180
         grad = np.zeros(R.shape)
         ll = 0
         for i, row in enumerate(R):
             alpha = np.dot(precs[i], row)
-            ll -= .5 * np.dot(row, alpha)
-            ll -= .5 * logdets[i]
-            ll -= .5 * np.log(2*np.pi)
+            rowll = 0
+            rowll -= .5 * np.dot(row, alpha)
+            rowll -= .5 * logdets[i]
+            rowll -= .5 * np.log(2*np.pi)
             grad[i, :] = -alpha
-        return ll, grad.flatten()
+            ll += rowll
+            #if rowll < -100:
+            #    import pdb; pdb.set_trace()
+        return ll, grad
 
-    return means.copy(), event_prior_llgrad
+    shallow = means[:, 2] < 40
+    dd = means.copy()
+    n = np.sum(shallow)
+    dd[shallow, 2] = np.random.rand(n) * 40
+    #import pdb; pdb.set_trace()
+
+    return dd, event_prior_llgrad
 
 def seismic_exp_dir(args):
-    npts, block_size, thresh, init_cov, task = args.npts, args.rpc_blocksize, args.threshold, args.init_cov, args.task
+    npts, block_size, thresh, init_cov, task, synth_lscale = args.npts, args.rpc_blocksize, args.threshold, args.init_cov, args.task, args.synth_lscale
     import hashlib
     base_dir = "seismic_experiments"
-    run_name = "%d_%d_%.4f_%s_%s" % (npts, block_size, thresh, "default" if init_cov=="" else "_%s" % hashlib.md5(init_cov).hexdigest()[:8], task)
+    run_name = "%d_%d_%.4f_%s_%s_%.0f" % (npts, block_size, thresh, "default" if init_cov=="" else "_%s" % hashlib.md5(init_cov).hexdigest()[:8], task, synth_lscale)
     d =  os.path.join(base_dir, run_name)
     mkdir_p(d)
     return d
 
-def analyze_run_result(args, gprf):
+def dist_lld(x1, x2):
+    return dist_km((x1[0], x1[1]), (x2[0], x2[1])) + np.abs(x1[2] - x2[2])
+
+def analyze_run_result(args, gprf, x_prior, X_true, cov_true, lscale_true):
     d = seismic_exp_dir(args)
     seed = args.seed
     block_size = args.rpc_blocksize
@@ -301,34 +344,133 @@ def analyze_run_result(args, gprf):
     task = args.task
 
     steps, times, lls = load_log(d)
-    best_step = np.argmax(lls)
-    fname_X = os.path.join(d, "step_%05d_X.npy" % best_step)
-    X = np.load(fname_X)
 
-    if X.shape[0] <= 20000:
-        gpll, _, _ = gprf.gaussian_llgrad(X, gprf.Y)
-        print "likelihood under true GP", gpll
-        with open(os.path.join(d, "ll.txt"), 'w') as f:
-            f.write( "likelihood under true GP %f\n" % gpll)
-    else:
-        gpll = block_likelihood(X, gprf)
-        print "likelihood under local GP with 20k blocks", gpll
-        with open(os.path.join(d, "ll.txt"), 'w') as f:
-            f.write( "likelihood under local GP with 20k blocks %f\n" % gpll)
+    rfname = os.path.join(d, "results.txt")
+    results = open(rfname, 'w')
+    print "writing results to", rfname
 
 
-def block_likelihood(X, gprf, block_size=20000, seed=0):
+    def mad(X1, X2):
+        n = X1.shape[0]
+        dists = [dist_lld(X1[i], X2[i]) for i in range(n)]
+        return np.mean(dists), np.median(dists)
+
+    for i, step in enumerate(steps):
+
+        try:
+            fname_X = os.path.join(d, "step_%05d_X.npy" % step)
+            X = np.load(fname_X)
+        except IOError:
+            X = sdata.SX
+
+        try:
+            fname_cov = os.path.join(d, "step_%05d_cov.npy" % step)
+            FC = np.load(fname_cov)
+        except IOError:
+            FC = None
+
+        if FC is not None:
+            c1 = FC[0,2] / lscale_true
+        else:
+            c1 = 1.0
+        l1, l2 = mad(X_true, X)
+
+        s = "%d %.2f %.2f %.8f %.8f %.8f" % (step, times[i], lls[i], c1, l1, l2)
+        print s
+        results.write(s + "\n")
+
+    gprf.update_X(X_true)
+    gprf.update_covs(cov_true)
+    lltrue = gprf.llgrad(grad_X=False, grad_cov=False)[0]
+    priortrue = x_prior(X_true)[0]
+    s = "true X ll %.2f" % (lltrue  + priortrue)
+    print s
+    results.write(s + "\n")
+    results.close()
+
+
+
+def load_data(synth_lscale, seed):
+    try:
+        sorted_idc = np.load("sorted_idc.npy")
+        sorted_isc = np.load("sorted_isc.npy")
+        sorted_evids = np.load("sorted_evids.npy")
+    except IOError:
+        homedir = os.getenv("HOME")
+        idc_dict = scraped_to_evid_dict(os.path.join(homedir, "python/gprf/idc.txt"))
+        isc_dict = scraped_to_evid_dict(os.path.join(homedir, "python/gprf/isc.txt"))
+
+        idc = []
+        isc = []
+        keyerror = 0
+        evids = []
+        for evid in isc_dict.keys():
+            try:
+                idc.append(idc_dict[evid])
+                isc.append(isc_dict[evid])
+                evids.append(evid)
+            except KeyError:
+                keyerror += 1
+        idc = np.asarray(idc)
+        isc = np.asarray(isc)
+        evids = np.asarray(evids)
+        n = len(idc)
+
+        dists = np.asarray([dist_lld(idc[i, (COL_LON, COL_LAT, COL_DEPTH)], isc[i, (COL_LON, COL_LAT, COL_DEPTH)] ) for i in range(n)])
+        inliers = dists < 3*idc[:, COL_SMAJ]
+        idc = idc[inliers]
+        isc = isc[inliers]
+
+        XX = idc[:, [COL_LON, COL_LAT]]
+        sorted_XX, sorted_idc, sorted_isc, sorted_evids = sort_morton(XX, idc, isc, evids)
+
+        print "loaded X", len(idc), "from", n
+        np.save("sorted_idc.npy", sorted_idc)
+        np.save("sorted_isc.npy", sorted_isc)
+        np.save("sorted_evids.npy", sorted_evids)
+
+    #sorted_idc[:, COL_DEPTH] = sorted_isc[:, COL_DEPTH]
+
     np.random.seed(seed)
-    n = X.shape[0]
-    p = np.arange(n)
-    CC = cluster_rpc((X, gprf.Y, p), 20000)
+    XX = sorted_isc[:, [COL_LON, COL_LAT, COL_DEPTH]].copy()
+    try:
+        SY = np.load("seismic_Y_%.1f_%d.npy" % (synth_lscale, seed))
+        cov = GPCov(wfn_params=[1.0], dfn_params=[synth_lscale,synth_lscale], dfn_str="lld", wfn_str="matern32")
+    except:
+        if synth_lscale == -1:
+            SY = load_fourier(sorted_evids)
+        else:
+            cov = GPCov(wfn_params=[1.0], dfn_params=[synth_lscale,synth_lscale], dfn_str="lld", wfn_str="matern32")
+            SY = sample_y(XX, cov, 0.1, 50, sparse_lscales=6.0)
 
-    ll = 0
-    for i, (bX, bY, _) in enumerate(CC):
-        bll, _, _ = gprf.gaussian_llgrad(bX, bY)
-        print "likelihood", bll, "for block", i
-        ll+= bll
-    return ll
+            print "sampled Y"
+        np.save("seismic_Y_%.1f_%d.npy" % (synth_lscale, seed), SY)
+
+    if synth_lscale == -1:
+        cov = GPCov(wfn_params=[1.0], dfn_params=[40.0,40.0], dfn_str="lld", wfn_str="matern32")
+
+    return sorted_idc, sorted_isc, SY, cov
+
+def load_fourier(evids):
+    homedir = os.getenv("HOME")
+    fourier = np.load(os.path.join(homedir, "python/gprf/fourier_signals.npy"))
+    n = fourier.shape[0]
+    evid_idx = {}
+    for i in range(n):
+        evid = int(fourier[i,0])
+        evid_idx[evid] = i
+
+    Y = []
+    for evid in evids:
+        idx = evid_idx[int(evid)]
+        y = fourier[idx, 1:]
+        if np.isnan(y).any():
+            y[:] = 0
+        Y.append(y)
+    Y = np.asarray(Y)
+    Y -= np.mean(Y, axis=0)
+    Y /= np.std(Y)
+    return Y
 
 def main():
 
@@ -343,6 +485,7 @@ def main():
     parser.add_argument('--analyze_init', dest='analyze_init', default=False, action="store_true")
     parser.add_argument('--rpc_blocksize', dest='rpc_blocksize', default=300, type=int)
     parser.add_argument('--init_cov', dest='init_cov', default="", type=str)
+    parser.add_argument('--synth_lscale', dest='synth_lscale', default=40.0, type=float)
     #parser.add_argument('--prior', dest='prior', default="isc", type=str)
     parser.add_argument('--task', dest='task', default="x", type=str)
     parser.add_argument('--parallel', dest='parallel', default=False, action="store_true")
@@ -356,41 +499,55 @@ def main():
     npts = args.npts
     task = args.task
     analyze = args.analyze
+    synth_lscale = args.synth_lscale
 
-    fd, y = load_seismic_locations()
-    sd, Y = select_subset(fd, y, npts)
-
-    XX = sd[:, [COL_LON, COL_LAT]]
+    sorted_idc, sorted_isc, SY, cov = load_data(synth_lscale, seed)
     np.random.seed(seed)
-    if block_size > 0:
-        CC = cluster_rpc((XX, Y, np.arange(npts)), block_size)
-        _, SY, perm, block_boundaries = sort_by_cluster(CC)
-        sdp = sd[perm]
+    cov_true = np.array([0.1, cov.wfn_params[0], cov.dfn_params[0], cov.dfn_params[1]]).reshape((1, -1))
+    if synth_lscale < 0:
+        cov_true[0,0] = 1.0
+        cov_true[0,1] = 0.1
+
+
+    if args.npts > 0:
+        npts = args.npts
+        base = 60000
+        sorted_idc = sorted_idc[base:base+npts, :]
+        sorted_isc = sorted_isc[base:base+npts, :]
+        SY = SY[base:base+npts, :]
     else:
-        sdp = sd
-        block_boundaries = [(0, npts)]
-        perm = np.arange(npts)
-        SY = Y
+        npts = len(SY)
+    
+    X_true = sorted_isc[:, (COL_LON, COL_LAT, COL_DEPTH)]
+    X0, x_prior = build_prior(sorted_idc)
 
-    X0, x_prior = build_prior(sdp)
+    #X0[:, 2] = X_true[:, 2]
 
-    np.save(os.path.join(d, "sdp.npy"), sdp)
-    np.save(os.path.join(d, "perm.npy"), perm)
-    np.save(os.path.join(d, "blocks.npy"), np.array(block_boundaries))
-    print "saving to", d
+    n = X0.shape[0]
+    all_idxs = np.arange(n)
+    cluster_idxs, cluster_bounds, splits = kdtree_cluster(X0, blocksize=block_size)
+    def reblock(X):
+        lons = X[:, 0].copy()
+        X[:, 0]  = (lons + 18) % 360 - 18
+        cluster_idxs = clusters_from_splits(X, all_idxs, splits)
+        X[:, 0]  = lons
+        return cluster_idxs
+    if threshold < 1.0:
+        neighbors = tree_neighbors(cluster_bounds)
+    else:
+        neighbors = []
 
     if init_cov == "":
-        C0 = np.exp(np.array((-7.5, -5.5, 2.0, 2.0)).reshape((1, -1)))
+        C0 = cov_true.copy() #np.exp(np.array((-3.0, 0.0, 3.0, 3.0)).reshape((1, -1)))
     else:
         C0 = np.load(init_cov)
 
-    nv = C0[0,0]
-    cov = GPCov(wfn_params=[C0[0,1]], dfn_params=C0[0, 2:], dfn_str="lld", wfn_str="matern32")
-    gprf =  GPRF(X0, SY, block_boundaries,
-                           cov, nv,
-                           neighbor_threshold=threshold,
-                           nonstationary=False,
-                           kernelized=False)
+    nv = cov_true[0,0]
+    gprf =  GPRF(X0, SY, reblock, cov, nv,
+                 neighbor_threshold=threshold,
+                 block_idxs=cluster_idxs, neighbors=neighbors)
+    if neighbors is None:
+        np.save("neighbors_%d_%d.npy" % (seed, block_size), gprf.neighbors)
 
     if task=="x":
         C0 = None
@@ -406,8 +563,8 @@ def main():
     if not analyze:
         do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=args.maxsec, parallel=args.parallel)
 
-    if task=="x":
-        analyze_run_result(args, gprf)
+    if task=="x" or task=="xcov":
+        analyze_run_result(args, gprf, x_prior, X_true, cov_true, synth_lscale)
 
 
 

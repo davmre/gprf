@@ -1,6 +1,19 @@
 import os
 import cPickle as pickle
 
+
+def scraped_to_evid_dict(fname):
+    d = {}
+    with open(fname, 'r') as f:
+        for line in f:
+            l = [float(v) for v in line.split(",")]
+            evid = int(l[1]) 
+            d[evid] = l[2:]
+    return d
+
+
+    
+
 def load_events(sta="mkar", basedir="/home/dmoore/p_waves/"):
     s = []
     for i in range(1, 1000):
