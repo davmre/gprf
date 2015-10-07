@@ -323,10 +323,13 @@ def build_prior(sd):
     return dd, event_prior_llgrad
 
 def seismic_exp_dir(args):
-    npts, block_size, thresh, init_cov, task, synth_lscale = args.npts, args.rpc_blocksize, args.threshold, args.init_cov, args.task, args.synth_lscale
+    npts, block_size, thresh, init_cov, init_x, task, synth_lscale = args.npts, args.rpc_blocksize, args.threshold, args.init_cov, args.init_x, args.task, args.synth_lscale
     import hashlib
     base_dir = "seismic_experiments"
-    run_name = "%d_%d_%.4f_%s_%s_%.0f" % (npts, block_size, thresh, "default" if init_cov=="" else "_%s" % hashlib.md5(init_cov).hexdigest()[:8], task, synth_lscale)
+    init_str = "default"
+    if init_cov or init_x:
+        init_str = "_%s" % hashlib.md5(init_cov+init_x).hexdigest()[:8]
+    run_name = "%d_%d_%.4f_%s_%s_%.0f" % (npts, block_size, thresh, init_str, task, synth_lscale)
     d =  os.path.join(base_dir, run_name)
     mkdir_p(d)
     return d
@@ -340,6 +343,7 @@ def analyze_run_result(args, gprf, x_prior, X_true, cov_true, lscale_true):
     block_size = args.rpc_blocksize
     threshold = args.threshold
     init_cov = args.init_cov
+    init_x = args.init_x
     npts = args.npts
     task = args.task
 
@@ -486,6 +490,7 @@ def main():
     parser.add_argument('--analyze_init', dest='analyze_init', default=False, action="store_true")
     parser.add_argument('--rpc_blocksize', dest='rpc_blocksize', default=300, type=int)
     parser.add_argument('--init_cov', dest='init_cov', default="", type=str)
+    parser.add_argument('--init_x', dest='init_x', default="", type=str)
     parser.add_argument('--synth_lscale', dest='synth_lscale', default=40.0, type=float)
     #parser.add_argument('--prior', dest='prior', default="isc", type=str)
     parser.add_argument('--task', dest='task', default="x", type=str)
@@ -497,6 +502,7 @@ def main():
     block_size = args.rpc_blocksize
     threshold = args.threshold
     init_cov = args.init_cov
+    init_x = args.init_x
     npts = args.npts
     task = args.task
     analyze = args.analyze
@@ -542,6 +548,12 @@ def main():
         C0 = cov_true.copy() #np.exp(np.array((-3.0, 0.0, 3.0, 3.0)).reshape((1, -1)))
     else:
         C0 = np.load(init_cov)
+
+    if init_x == "":
+        pass
+    else:
+        X0 = np.load(init_x)
+
 
     nv = cov_true[0,0]
     gprf =  GPRF(X0, SY, reblock, cov, nv,
