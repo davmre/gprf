@@ -306,22 +306,18 @@ class GPRF(object):
             gradX += pgX[:n_block]
         return ll, gradX
 
-    def llgrad_unary(self, i, **kwargs):
+    def llgrad_unary(self, i, sparse=False, **kwargs):
         idxs = self.block_idxs[i]
         X = self.X[idxs]
+        Y = self.Y[idxs]
         #print "unary %d size %d" % (i, len(idxs))
 
-        if self.nonstationary:
-            kwargs['block_i'] = i
-
-        if self.kernelized:
-            YY = self.YY[idxs][:, idxs] #[i_start:i_end, i_start:i_end]
-            return self.gaussian_llgrad_kernel(X, YY, dy=self.dy, **kwargs)
+        if sparse:
+            return self.gaussian_llgrad_sparse(X, Y, **kwargs)
         else:
-            Y = self.Y[idxs]
             return self.gaussian_llgrad(X, Y, **kwargs)
 
-    def llgrad_joint(self, i, j, **kwargs):
+    def llgrad_joint(self, i, j, sparse=False, **kwargs):
 
         #i_start, i_end = self.block_boundaries[i]
         #j_start, j_end = self.block_boundaries[j]
@@ -335,23 +331,12 @@ class GPRF(object):
         nj = Xj.shape[0]
         X = np.vstack([Xi, Xj])
 
-        if self.nonstationary:
-            kwargs['block_i'] = i
-            kwargs['block_j'] = j
-
-
-        if self.kernelized:
-            raise Exception("need to fix indices for kernelized joint llgrad")
-            YY = np.empty((ni+nj, ni+nj))
-            YY[:ni, :ni] = self.YY[i_start:i_end, i_start:i_end]
-            YY[ni:, ni:] = self.YY[j_start:j_end, j_start:j_end]
-            YY[:ni, ni:] = self.YY[i_start:i_end, j_start:j_end]
-            YY[ni:, :ni]  = YY[:ni, ni:].T
-            return self.gaussian_llgrad_kernel(X, YY, dy=self.dy, **kwargs)
+        Yi = self.Y[idxs]
+        Yj = self.Y[jdxs]
+        Y = np.vstack([Yi, Yj])
+        if sparse:
+            return self.gaussian_llgrad_sparse(X, Y, **kwargs)
         else:
-            Yi = self.Y[idxs]
-            Yj = self.Y[jdxs]
-            Y = np.vstack([Yi, Yj])
             return self.gaussian_llgrad(X, Y, **kwargs)
 
 
@@ -440,31 +425,37 @@ class GPRF(object):
         t05 = time.time()
 
         entries = tree.sparse_training_kernel_matrix(X, max_distance, False)
-        #t06 = time.time()
+        t06 = time.time()
         nzr, nzc, entries_K = np.array(entries[:,0], dtype=np.int32), np.array(entries[:,1], dtype=np.int32), entries[:,2]
-        #t07 = time.time()
+        t07 = time.time()
         distances = tree.sparse_distances(X, X, nzr, nzc);
-        #t08 = time.time()
+        t08 = time.time()
         spK = scipy.sparse.coo_matrix((entries_K, (nzr, nzc)), shape=(n,n), dtype=float)
-        spK = spK + self.noise_var * scipy.sparse.eye(spK.shape[0])
+        spK = (spK + self.noise_var * scipy.sparse.eye(spK.shape[0])).tocsc()
 
         t1 = time.time()
-        #print " sparse entires %.3f copy %.03f distances %.03f matrix %.03f" % (t06-t05, t07-t06, t08-t07, t1-t08)
+        print " sparse entires %.3f copy %.03f distances %.03f matrix %.03f" % (t06-t05, t07-t06, t08-t07, t1-t08)
 
         
         factor = scikits.sparse.cholmod.cholesky(spK)
         t11 = time.time()
         Alpha = factor(Y)
         t12 = time.time()
-        prec = factor(scipy.sparse.eye(spK.shape[0]).tocsc())
+        prec = factor.inv()
         t13 = time.time()
-        pprec = pdinv(spK.toarray())
+        #pprec = pdinv(spK.toarray())
         t133 = time.time()
 
-        unpermuted_L = factor.L()
-        logdet = np.sum(np.log(unpermuted_L.diagonal()))*2
+
+        logdet = factor.logdet()
         t14 = time.time()
         print " sparse factor %.3f alpha %.3f inv %.3f pinv %.3f logdet %.3f" % (t11-t1, t12-t11, t13-t12, t133-t13, t14-t133)
+
+
+        unpermuted_L = factor.L()
+        P = factor.P()
+        Pinv = np.argsort(P)
+        L = unpermuted_L[Pinv][:,Pinv]
 
 
         ll = -.5 * np.sum(Y*Alpha)
@@ -477,8 +468,20 @@ class GPRF(object):
     
             for i in range(dx):
                 dK_entries = tree.sparse_kernel_deriv_wrt_xi(X, i, nzr, nzc, distances)
-                sdK = scipy.sparse.coo_matrix((dK_entries, (nzr, nzc)), shape=spK.shape, dtype=float)
+                sdK = scipy.sparse.coo_matrix((dK_entries, (nzr, nzc)), shape=spK.shape, dtype=float).tocsc()
                 d_logdet = -dy * np.asarray(sdK.multiply(prec).sum(axis=1)).reshape((-1,))
+                #d_logdet = -dy * factor(sdK).diagonal()
+
+                """
+                LL = L.toarray()
+                V = 1.0/LL
+                VV = V.reshape((-1,))
+                nans = np.isinf(VV)
+                VV[nans] = 0
+                dK = sdK.toarray()
+                d_logdet2 = np.sum(dK * V, axis=1)
+                import pdb; pdb.set_trace()
+                """
 
                 dK_alpha = sdK * Alpha
                 scaled = dK_alpha * Alpha
@@ -500,15 +503,15 @@ class GPRF(object):
                 else:
                     dK_entries = tree.sparse_kernel_deriv_wrt_i(X, X,  nzr, nzc, i-2, distances)
                     #dKdi = self.dKdi(X, i, block=block_i)
-                    dKdi = scipy.sparse.coo_matrix((dK_entries, (nzr, nzc)), shape=spK.shape, dtype=float)
+                    dKdi = scipy.sparse.coo_matrix((dK_entries, (nzr, nzc)), shape=spK.shape, dtype=float).tocsc()
 
                 dlldi = .5 * np.sum(np.multiply(Alpha,dKdi* Alpha))
-                dlldi -= .5 * dy * dKdi.multiply(prec).sum()
+                dlldi -= .5 * dy * dKdi.multiply(prec).sum() # factor(dKdi).diagonal().sum() 
                 gradC[i] = dlldi
 
         t4 = time.time()
         print "sparse tree %.4f kernel %.3f ll %.3f gradX %.3f gradC %.3f total %.3f" % (t05-t0, t1-t05, t2-t1, t3-t2, t4-t3, t4-t0)
-
+        return ll, gradX, gradC
 
     def gaussian_llgrad(self, X, Y, grad_X = False, grad_cov=False, block_i=None, block_j=None, block_split_n=None):
 
@@ -553,6 +556,7 @@ class GPRF(object):
             return ll, gradX, gradC
         """
 
+
         ll = -.5 * np.sum(Y*Alpha)
         ll += -.5 * dy * logdet #np.linalg.slogdet(K)[1]
         ll += -.5 * dy * n * np.log(2*np.pi)
@@ -574,48 +578,13 @@ class GPRF(object):
 
                     dK[i][p, :] = dcv
 
-
-            """
-            for p in range(n):
-                for i in range(dx):
-                    dll = 0
-
-                    dcv = dK[i][p,:]
-
-                    #t1 = -np.outer(prec[p,:], dcv)
-                    #t1[:, p] = -np.dot(prec, dcv)
-                    #dll_dcov = .5*ny*np.trace(t1)
-                    dll = -dy * np.dot(prec[p,:], dcv)
-
-                    #dK_Alpha = np.outer(dcv, Alpha[p, :])
-                    #dK_Alpha = dcv * Alpha[p, :]
-                    #k0 = np.sum(Alpha * dK_Alpha)
-                    #rowP = np.dot(dcv, Alpha)
-                    #dK_Alpha[p, :] = np.dot(dcv, Alpha)
-                    #dll_dcov = .5 * np.sum(Alpha * dK_Alpha)
-                    new_rowp= np.dot(dcv.T, Alpha)
-                    k1 = np.dot(new_rowp, Alpha[p, :])
-                    old_rowp = dcv[p] * Alpha[p, :]
-                    k2 = k1 + np.dot(Alpha[p, :], new_rowp-old_rowp)
-                    dll_dcov = .5* k2
-
-                    dll += dll_dcov
-
-                    ""
-                    for j in range(dy):
-                        alpha = Alpha[:,j]
-                        dK_alpha = dcv * alpha[p]
-                        dK_alpha[p] = np.dot(dcv, alpha)
-                        dll_dcov = .5*np.dot(alpha, dK_alpha)
-                        dll += dll_dcov
-                    ""
-                    gradX[p,i] = dll
-            """
-
-            #gradX2 = np.zeros(gradX.shape)
             for i in range(dx):
                 dKi = dK[i]
-                d_logdet = -dy * np.sum(prec * dKi, axis=1)
+                d_logdet = -dy * np.sum(np.multiply(prec, dKi), axis=1)
+
+                
+
+
                 gradX[:, i] = d_logdet
                 dK_alpha = np.dot(dKi, Alpha)
                 scaled = dK_alpha * Alpha
@@ -633,9 +602,8 @@ class GPRF(object):
                 gradC[i] = dlldi
 
         t4 = time.time()
-        print "dense kernel %.3f ll %.3f gradX %.3f gradC %.3f total %.3f" % (t1-t0, t2-t1, t3-t2, t4-t3, t4-t0)
 
-        self.gaussian_llgrad_sparse(X, Y, grad_X = grad_X, grad_cov=grad_cov, max_distance=5.0)
+        #print "dense kernel %.3f ll %.3f gradX %.3f gradC %.3f total %.3f" % (t1-t0, t2-t1, t3-t2, t4-t3, t4-t0)
 
         #print "llgrad %d pts %.4s" % (n, t1-t0)
         return ll, gradX, gradC

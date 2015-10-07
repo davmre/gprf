@@ -110,7 +110,7 @@ def cov_prior(c):
     lderiv = -(c-means)/(std**2)
     return ll, lderiv
 
-def do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=3600, parallel=False):
+def do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=3600, parallel=False, sparse=False):
     gradX = (X0 is not None)
     gradC = (C0 is not None)
 
@@ -153,7 +153,7 @@ def do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=3600, parallel=F
             np.save(os.path.join(d, "step_%05d_cov.npy" % sstep[0]), FC)
 
         ll, gX, gC = gprf.llgrad(local=True, grad_X=gradX, grad_cov=gradC,
-                                       parallel=parallel)
+                                       parallel=parallel, sparse=sparse)
         
         gX[:, 2] *= depth_scale
 
@@ -481,6 +481,7 @@ def main():
     parser.add_argument('--threshold', dest='threshold', default=0.0, type=float)
     parser.add_argument('--seed', dest='seed', default=0, type=int)
     parser.add_argument('--maxsec', dest='maxsec', default=3600, type=int)
+    parser.add_argument('--sparse', dest='sparse', default=False, action="store_true")
     parser.add_argument('--analyze', dest='analyze', default=False, action="store_true")
     parser.add_argument('--analyze_init', dest='analyze_init', default=False, action="store_true")
     parser.add_argument('--rpc_blocksize', dest='rpc_blocksize', default=300, type=int)
@@ -561,7 +562,7 @@ def main():
         sys.exit(0)
 
     if not analyze:
-        do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=args.maxsec, parallel=args.parallel)
+        do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=args.maxsec, parallel=args.parallel, sparse=args.sparse)
 
     if task=="x" or task=="xcov":
         analyze_run_result(args, gprf, x_prior, X_true, cov_true, synth_lscale)
