@@ -1,7 +1,7 @@
 from gprf import GPRF, Blocker
 from gprfopt import cluster_rpc, OutOfTimeError, load_log
 from seismic.seismic_util import scraped_to_evid_dict
-from kdtree_clustering import tree_neighbors, kdtree_cluster, clusters_from_splits
+from pdtree_clustering import pdtree_cluster
 from synthetic import sample_y
 
 from treegp.gp import GPCov, GP, mcov, prior_sample, dgaussian, sort_morton
@@ -323,19 +323,21 @@ def build_prior(sd):
     return dd, event_prior_llgrad
 
 def seismic_exp_dir(args):
-    npts, block_size, thresh, init_cov, init_x, task, synth_lscale = args.npts, args.rpc_blocksize, args.threshold, args.init_cov, args.init_x, args.task, args.synth_lscale
+    npts, block_size, thresh, init_cov, init_x, task, synth_lscale, obs_std = args.npts, args.rpc_blocksize, args.threshold, args.init_cov, args.init_x, args.task, args.synth_lscale, args.obs_std
     import hashlib
     base_dir = "seismic_experiments"
     init_str = "default"
     if init_cov or init_x:
         init_str = "_%s" % hashlib.md5(init_cov+init_x).hexdigest()[:8]
-    run_name = "%d_%d_%.4f_%s_%s_%.0f" % (npts, block_size, thresh, init_str, task, synth_lscale)
+    run_name = "%d_%d_%.4f_%s_%s_%.0f_%.1f" % (npts, block_size, thresh, init_str, task, synth_lscale, obs_std)
     d =  os.path.join(base_dir, run_name)
     mkdir_p(d)
     return d
 
 def dist_lld(x1, x2):
-    return dist_km((x1[0], x1[1]), (x2[0], x2[1])) + np.abs(x1[2] - x2[2])
+    d1 = dist_km((x1[0], x1[1]), (x2[0], x2[1]))
+    d2 = x1[2] - x2[2]
+    return np.sqrt(d1**2 + d2**2)
 
 def analyze_run_result(args, gprf, x_prior, X_true, cov_true, lscale_true):
     d = seismic_exp_dir(args)
@@ -481,8 +483,8 @@ def main():
     parser = argparse.ArgumentParser(description='seismic')
 
     parser.add_argument('--npts', dest='npts', default=-1, type=int)
-
-    parser.add_argument('--threshold', dest='threshold', default=0.0, type=float)
+    parser.add_argument('--obs_std', dest='obs_std', default=-1, type=float)
+    parser.add_argument('--threshold', dest='threshold', default=1.0, type=float)
     parser.add_argument('--seed', dest='seed', default=0, type=int)
     parser.add_argument('--maxsec', dest='maxsec', default=3600, type=int)
     parser.add_argument('--sparse', dest='sparse', default=False, action="store_true")
@@ -501,6 +503,7 @@ def main():
     seed = args.seed
     block_size = args.rpc_blocksize
     threshold = args.threshold
+    obs_std = args.obs_std
     init_cov = args.init_cov
     init_x = args.init_x
     npts = args.npts
@@ -509,6 +512,7 @@ def main():
     synth_lscale = args.synth_lscale
 
     sorted_idc, sorted_isc, SY, cov = load_data(synth_lscale, seed)
+
     np.random.seed(seed)
     cov_true = np.array([0.1, cov.wfn_params[0], cov.dfn_params[0], cov.dfn_params[1]]).reshape((1, -1))
     if synth_lscale < 0:
@@ -526,26 +530,41 @@ def main():
         npts = len(SY)
     
     X_true = sorted_isc[:, (COL_LON, COL_LAT, COL_DEPTH)]
-    X0, x_prior = build_prior(sorted_idc)
-
-    #X0[:, 2] = X_true[:, 2]
+    if obs_std < 0:
+        X0, x_prior = build_prior(sorted_idc)
+    else:
+        prior_std = obs_std * np.array([.01, .01, 1.])
+        noise = np.random.randn(*X_true.shape) * prior_std
+        means = X_true + noise
+        X0 = means.copy()
+        def x_prior(X):
+            r = (X-means)/prior_std
+            r2 = r/prior_std
+            r = r.flatten()
+            r2 = r2.flatten()
+            n = X.shape[0]
+            ll = -.5*np.sum( r**2)- .5 *n * (3*np.log(2*np.pi) +np.sum(np.log(prior_std**2)))
+            lderiv = -r2.reshape(X.shape)
+            return ll, lderiv            
 
     n = X0.shape[0]
     all_idxs = np.arange(n)
-    cluster_idxs, cluster_bounds, splits = kdtree_cluster(X0, blocksize=block_size)
-    def reblock(X):
-        lons = X[:, 0].copy()
-        X[:, 0]  = (lons + 18) % 360 - 18
-        cluster_idxs = clusters_from_splits(X, all_idxs, splits)
-        X[:, 0]  = lons
-        return cluster_idxs
-    if threshold < 1.0:
-        neighbors = tree_neighbors(cluster_bounds)
-    else:
+    cluster_idxs, reblock = pdtree_cluster(X0, blocksize=block_size)
+
+    neighbor_fname = "neighbors_%d_%d_%.3f_%.3f.npy" % (n, block_size, threshold, obs_std)
+    if threshold == 1.0:
         neighbors = []
+    else:
+        try:
+            # it's possible to get neighbors directly from the principle axis tree,
+            # but since it's a onetime cost we'll just bruteforce it rather than
+            # bother with the implementation
+            neighbors = np.load(neighbor_fname)
+        except:
+            neighbors = None
 
     if init_cov == "":
-        C0 = cov_true.copy() #np.exp(np.array((-3.0, 0.0, 3.0, 3.0)).reshape((1, -1)))
+        C0 = cov_true.copy() 
     else:
         C0 = np.load(init_cov)
 
@@ -554,13 +573,12 @@ def main():
     else:
         X0 = np.load(init_x)
 
-
     nv = cov_true[0,0]
     gprf =  GPRF(X0, SY, reblock, cov, nv,
                  neighbor_threshold=threshold,
                  block_idxs=cluster_idxs, neighbors=neighbors)
     if neighbors is None:
-        np.save("neighbors_%d_%d.npy" % (seed, block_size), gprf.neighbors)
+        np.save(neighbor_fname, gprf.neighbors)
 
     if task=="x":
         C0 = None
@@ -578,7 +596,6 @@ def main():
 
     if task=="x" or task=="xcov":
         analyze_run_result(args, gprf, x_prior, X_true, cov_true, synth_lscale)
-
 
 
 if __name__ == "__main__":

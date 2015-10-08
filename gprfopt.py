@@ -340,7 +340,7 @@ def do_optimization(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False)
 
     def cov_prior(c):
         mean = -1
-        std = 3
+        std = 10
         r = (c-mean)/std
         ll = -.5*np.sum( r**2)- .5 *len(c) * np.log(2*np.pi*std**2)
         lderiv = -(c-mean)/(std**2)
@@ -789,11 +789,13 @@ def do_run(d, lscale, n, ntrain, nblocks, yd, seed=0,
         C0 = None
     elif task == 'cov':
         X0 = None
+        gprf.update_X(data.SX)
+
         if init_seed >= 0:
             np.random.seed(init_seed)
             C0 = np.exp(np.random.randn(1, 4)-1)
         else:
-            C0 = np.array((0.1, 1.0, 0.3,  0.3)).reshape(1,-1)
+            C0 = np.array((0.01, 1.0, 0.05,  0.05)).reshape(1,-1)
     elif task =='xcov':
         X0 = data.X_obs
         if init_seed >= 0:

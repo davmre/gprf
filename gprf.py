@@ -102,18 +102,11 @@ class GPRF(object):
         self.n_blocks = len(block_idxs)
 
         self.nonstationary = nonstationary
-        if not nonstationary:
-            self.cov = cov
-            self.noise_var = noise_var
-            dummy_X = np.array([[0.0,] * self.X.shape[1],], dtype=float)
-            self.predict_tree = VectorTree(dummy_X, 1, cov.dfn_str, cov.dfn_params, cov.wfn_str, cov.wfn_params)
-        else:
-            dummy_X = np.array([[0.0,] * self.X.shape[1],], dtype=float)
-            predict_tree = VectorTree(dummy_X, 1, cov.dfn_str, cov.dfn_params, cov.wfn_str, cov.wfn_params)
 
-            self.block_covs = [(noise_var, cov) for i in range(self.n_blocks)]
-            self.block_trees = [predict_tree for i in range(self.n_blocks)]
-            self.nonstationary_prec=nonstationary_prec
+        self.cov = cov
+        self.noise_var = noise_var
+        dummy_X = np.array([[0.0,] * self.X.shape[1],], dtype=float)
+        self.predict_tree = VectorTree(dummy_X, 1, cov.dfn_str, cov.dfn_params, cov.wfn_str, cov.wfn_params)
 
         if neighbors is not None:
             self.neighbors = neighbors
@@ -161,27 +154,13 @@ class GPRF(object):
                 
 
     def update_covs(self, covs):
-        if not self.nonstationary:
-            nv, sv = covs[0, :2]
-            lscales = covs[0, 2:]
-            self.cov = GPCov(wfn_params=[sv,], dfn_params=lscales, dfn_str=self.cov.dfn_str, wfn_str=self.cov.wfn_str)
-            self.noise_var = nv
+        nv, sv = covs[0, :2]
+        lscales = covs[0, 2:]
+        self.cov = GPCov(wfn_params=[sv,], dfn_params=lscales, dfn_str=self.cov.dfn_str, wfn_str=self.cov.wfn_str)
+        self.noise_var = nv
 
-            dummy_X = np.array([[0.0,] * self.X.shape[1],], dtype=float)
-            self.predict_tree = VectorTree(dummy_X, 1, self.cov.dfn_str, self.cov.dfn_params, self.cov.wfn_str, self.cov.wfn_params)
-        else:
-            block_covs = []
-            block_trees = []
-            dummy_X = np.array([[0.0,] * self.X.shape[1],], dtype=float)
-            for block, covparams in enumerate(covs):
-                nv, sv = covparams[:2]
-                lscales = covparams[2:]
-                cov = GPCov(wfn_params=[sv,], dfn_params=lscales, dfn_str=self.dfn_str, wfn_str="se")
-                block_covs.append((nv, cov))
-                pt = VectorTree(dummy_X, 1, cov.dfn_str, cov.dfn_params, cov.wfn_str, cov.wfn_params)
-                block_trees.append(pt)
-            self.block_trees = block_trees
-            self.block_covs = block_covs
+        dummy_X = np.array([[0.0,] * self.X.shape[1],], dtype=float)
+        self.predict_tree = VectorTree(dummy_X, 1, self.cov.dfn_str, self.cov.dfn_params, self.cov.wfn_str, self.cov.wfn_params)
 
     def update_X(self, new_X, update_blocks=True, recompute_neighbors=False):
         self.X = new_X
@@ -287,24 +266,6 @@ class GPRF(object):
 
         return ll, gradX, gradCov
 
-    def llgrad_blanket(self, i, **kwargs):
-        # compute the terms of the objective corresponding to the Markov 
-        # blanket of block i. Optimizing these terms with respect to X_i
-        # is a coordinate ascent step on the full objective.
-        idxs = self.block_idxs[i]
-        n_block = len(idxs)
-
-        # ignore gradCov return value since it's nonsensical to
-        # optimize global covariance hparams over local blankets
-        ll, gradX, _ = self.llgrad_unary(i, **kwargs)
-        ll *= (1-self.neighbor_count[i])
-        gradX *= (1-self.neighbor_count[i])
-
-        for j in self.neighbor_dict[i]:
-            pll, pgX, _ = self.llgrad_joint(i, j, **kwargs)
-            ll += pll
-            gradX += pgX[:n_block]
-        return ll, gradX
 
     def llgrad_unary(self, i, sparse=False, **kwargs):
         idxs = self.block_idxs[i]
@@ -340,13 +301,9 @@ class GPRF(object):
             return self.gaussian_llgrad(X, Y, **kwargs)
 
 
-    def kernel(self, X, X2=None, block=None):
-        if block is None:
-            ptree = self.predict_tree
-            nv = self.noise_var
-        else:
-            ptree = self.block_trees[block]
-            nv = self.block_covs[block][0]
+    def kernel(self, X, X2=None):
+        ptree = self.predict_tree
+        nv = self.noise_var
 
         if X2 is None:
             n = X.shape[0]
@@ -356,12 +313,10 @@ class GPRF(object):
             K = ptree.kernel_matrix(X, X2, False)
         return K
 
-    def dKdx(self, X, p, i, return_vec=False, dKv=None, block=None):
+    def dKdx(self, X, p, i, return_vec=False, dKv=None):
         # derivative of kernel(X1, X2) wrt i'th coordinate of p'th point in X1.
-        if block is None:
-            ptree = self.predict_tree
-        else:
-            ptree = self.block_trees[block]
+
+        ptree = self.predict_tree
 
         if return_vec:
             if dKv is None:
@@ -375,20 +330,16 @@ class GPRF(object):
             dK = dK + dK.T
             return dK
 
-    def dKdi(self, X1, i, block=None):
-        if block is None:
-            ptree = self.predict_tree
-            cov = self.cov
-        else:
-            ptree = self.block_trees[block]
-            cov = self.block_covs[block][1]
+    def dKdi(self, X1, i):
+        ptree = self.predict_tree
+        cov = self.cov
 
         if (i == 0):
             dKdi = np.eye(X1.shape[0])
         elif (i == 1):
             if (len(cov.wfn_params) != 1):
                 raise ValueError('gradient computation currently assumes just a single scaling parameter for weight function, but currently wfn_params=%s' % cov.wfn_params)
-            dKdi = self.kernel(X1, X1, block=block) / cov.wfn_params[0]
+            dKdi = self.kernel(X1, X1) / cov.wfn_params[0]
         else:
             dc = ptree.kernel_matrix(X1, X1, True)
             dKdi = ptree.kernel_deriv_wrt_i(X1, X1, i-2, 1, dc)
@@ -532,13 +483,15 @@ class GPRF(object):
                 gradC = np.zeros((ncov,))
             return 0.0, gradX, gradC
 
-        K = self.kernel(X, block=block_i)
+        K = self.kernel(X)
         t1 = time.time()
 
         #prec = np.linalg.inv(K)
         #Alpha = np.dot(prec, Y)
         prec, L, Lprec, logdet = pdinv(K)
         Alpha, _ = dpotrs(L, Y, lower=1)
+
+
 
         """
         numerical_error = check_inv(prec, K)
@@ -574,7 +527,7 @@ class GPRF(object):
             for p in range(n):
                 for i in range(dx):
                     dll = 0
-                    self.dKdx(X, p, i, return_vec=True, dKv=dcv, block=block_i)
+                    self.dKdx(X, p, i, return_vec=True, dKv=dcv)
 
                     dK[i][p, :] = dcv
 
@@ -596,7 +549,7 @@ class GPRF(object):
             ncov = 2 + len(self.cov.dfn_params)
             gradC = np.zeros((ncov,))
             for i in range(ncov):
-                dKdi = self.dKdi(X, i, block=block_i)
+                dKdi = self.dKdi(X, i)
                 dlldi = .5 * np.sum(np.multiply(Alpha,np.dot(dKdi, Alpha)))
                 dlldi -= .5 * dy * np.sum(np.sum(np.multiply(prec, dKdi)))
                 gradC[i] = dlldi

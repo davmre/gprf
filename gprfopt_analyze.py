@@ -367,22 +367,109 @@ def crazylines_run_params():
     return runs_gprf+runs_full
 
 
-def grid_run_params():
+def eighty_run_params():
+    yd = 50
+    seed = 0
+    method = "l-bfgs-b"
+    ntest  = 500
+
+    ntrain = 80000
+    local_nblocks = [16, 36, 100, 196, 400, 900]
+    gprf_nblocks = [100, 196, 400, 900]
+
+    runs = []
+
+    runs_by_key = defaultdict(list)
+
+    runs_gprf = []
+    runs_local = []
+
+
+    #lscale = 5.4772255750516621 / np.sqrt(ntrain)
+    #obs_std = 1.0954451150103324 / np.sqrt(ntrain)
+    lscale = 6.0 / np.sqrt(ntrain)
+    obs_std = 2.5 / np.sqrt(ntrain)
+
+    for nblocks in local_nblocks:
+        run_params_local = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 1.0, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0} 
+        runs_local.append(run_params_local)
+
+        key = "Local-%d" % nblocks
+        runs_by_key[key].append(run_params_local)
+
+    for nblocks in gprf_nblocks:
+        run_params_gprf = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 0.1, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0} 
+        runs_gprf.append(run_params_gprf)
+
+        key = "GPRF-%d" % nblocks
+        runs_by_key[key].append(run_params_gprf)
+
+
+    runs += runs_local
+    runs += runs_gprf
+
+
+
+    return runs, runs_by_key
+
+def truegp_run_params():
     yd = 50
     seed = 0
     method = "l-bfgs-b"
     ntest  = 500
 
     #ntrains = [5000, 10000, 15000, 20000]
-    ntrains = [10000, 20000, 30000, 40000, 60000, 80000]
-    block_size_min = 200
-    block_size_max_local = 4000
-    block_size_max_gprf = 1000
-    
-    local_block_size = [200, 400, 800, 2000, 4000]
-    gprf_block_size = [200, 400, 800]
+    local_nblocks = [1, 9, 25, 49, 100]
+    gprf_nblocks = [9, 25, 49, 100]
+    ns_inducing = [500, 1000, 2000, ]
+    runs = []
+    runs_by_key = defaultdict(list)
+    ntrain = 10000
 
-    ns_inducing = [1000, 2000, 4000, 10000]
+    runs_gprf = []
+    runs_local = []
+    runs_fitc = []
+
+    lscale = 6.0 / np.sqrt(ntrain)
+    obs_std = 2.5 / np.sqrt(ntrain)
+
+    for nblocks in local_nblocks:
+        run_params_local = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 1.0, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0} 
+        runs_local.append(run_params_local)
+
+        key = "Local-%d" % nblocks
+        runs_by_key[key].append(run_params_local)
+
+    for nblocks in gprf_nblocks:
+        run_params_gprf = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 0.1, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0} 
+        runs_gprf.append(run_params_gprf)
+
+        key = "GPRF-%d" % nblocks
+        runs_by_key[key].append(run_params_gprf)
+
+    for num_inducing in ns_inducing:
+        run_params_inducing = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed,  "method": method,  'task': 'x', 'noise_var': 0.01, 'gplvm_type': "sparse", 'num_inducing': num_inducing, "nblocks": 1, "local_dist": 1.0}
+        runs_fitc.append(run_params_inducing)
+        key = "FITC-%d" % num_inducing
+        runs_by_key[key].append(run_params_inducing)
+
+    runs += runs_local
+    runs += runs_gprf
+    runs += runs_fitc
+
+
+    return runs, runs_by_key
+
+def fitc_run_params():
+    yd = 50
+    seed = 0
+    method = "l-bfgs-b"
+    ntest  = 500
+
+    #ntrains = [5000, 10000, 15000, 20000]
+    ntrains = [10000, 15000, 20000, 25000, 30000, 35000, 40000]
+
+    ns_inducing = [500, 1000, 2000, 4000, ]
 
     def square_up(n):
         return int(np.ceil(np.sqrt(n)))
@@ -391,6 +478,8 @@ def grid_run_params():
     def get_nblocks(ntrain, block_size_target):
         return square_down(ntrain / float(block_size_target))**2
 
+    local_block_size = [200,]
+    gprf_block_size = [200,]
 
     runs = []
 
@@ -403,8 +492,8 @@ def grid_run_params():
 
         #lscale = 5.4772255750516621 / np.sqrt(ntrain)
         #obs_std = 1.0954451150103324 / np.sqrt(ntrain)
-        lscale = 6.12 / np.sqrt(ntrain)
-        obs_std = 2.45 / np.sqrt(ntrain)
+        lscale = 6.0 / np.sqrt(ntrain)
+        obs_std = 2.5 / np.sqrt(ntrain)
 
         for blocksize in local_block_size:
             nblocks = get_nblocks(ntrain, blocksize)
@@ -426,8 +515,6 @@ def grid_run_params():
             runs_by_key[key].append(run_params_gprf)
 
         for num_inducing in ns_inducing:
-            if num_inducing > ntrain/4.5:
-                continue
             run_params_inducing = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed,  "method": method,  'task': 'x', 'noise_var': 0.01, 'gplvm_type': "sparse", 'num_inducing': num_inducing, "nblocks": 1, "local_dist": 1.0}
             runs_fitc.append(run_params_inducing)
             key = "FITC-%d" % num_inducing
@@ -630,15 +717,18 @@ def gen_runs():
 
     #runs_cov = cov_run_params_hard()
     #runs_xcov = xcov_run_params()
-    cloud_base = "sudo su -c \"bash /home/sigvisa/python/gprf/run_cloud.sh"
+    cloud_base = "sudo su -c \"bash /home/sigvisa/python/gprf/run_cloud.sh gprfopt.py"
     cloud_tail = "\" sigvisa"
 
-    #runs_grid = grid_run_params()
-    #gen_runexp(runs_grid, cloud_base, "run_grid_cloud_analyze.sh", analyze=True, maxsec=21600, parallel=False, tail=cloud_tail)
+    runs_eighty, _ = eighty_run_params()
+    runs_truegp, _ = truegp_run_params()
+    runs_fitc, _ = fitc_run_params()
 
-    plot_grid_growing()
+    gen_runexp(runs_eighty, cloud_base, "run_cloud_eighty.sh", analyze=False, maxsec=86400, parallel=False, tail=cloud_tail)
+    gen_runexp(runs_truegp, cloud_base, "run_cloud_truegp.sh", analyze=False, maxsec=18000, parallel=False, tail=cloud_tail)
+    gen_runexp(runs_fitc, cloud_base, "run_cloud_fitc.sh", analyze=False, maxsec=18000, parallel=False, tail=cloud_tail)
 
-    #runs_fault = fault_run_params()
+
     #runs_lines = crazylines_run_gpy_params()
     #gen_runexp(runs_lines, "python gprfopt.py", "run_lines_gpy_big.sh", analyze=False, maxsec=10800)
     #runs_lines = crazylines_run_params()
