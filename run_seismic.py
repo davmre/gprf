@@ -439,8 +439,9 @@ def load_data(synth_lscale, seed):
 
     np.random.seed(seed)
     XX = sorted_isc[:, [COL_LON, COL_LAT, COL_DEPTH]].copy()
+    y_fname = "seismic_Y_%.1f_%d.npy" % (synth_lscale, seed)
     try:
-        SY = np.load("seismic_Y_%.1f_%d.npy" % (synth_lscale, seed))
+        SY = np.load(y_fname)
         cov = GPCov(wfn_params=[1.0], dfn_params=[synth_lscale,synth_lscale], dfn_str="lld", wfn_str="matern32")
     except:
         if synth_lscale == -1:
@@ -450,7 +451,7 @@ def load_data(synth_lscale, seed):
             SY = sample_y(XX, cov, 0.1, 50, sparse_lscales=6.0)
 
             print "sampled Y"
-        np.save("seismic_Y_%.1f_%d.npy" % (synth_lscale, seed), SY)
+        np.save(y_fname, SY)
 
     if synth_lscale == -1:
         cov = GPCov(wfn_params=[1.0], dfn_params=[40.0,40.0], dfn_str="lld", wfn_str="matern32")
@@ -533,6 +534,7 @@ def main():
     if obs_std < 0:
         X0, x_prior = build_prior(sorted_idc)
     else:
+        np.random.seed(seed)
         prior_std = obs_std * np.array([.01, .01, 1.])
         noise = np.random.randn(*X_true.shape) * prior_std
         means = X_true + noise
