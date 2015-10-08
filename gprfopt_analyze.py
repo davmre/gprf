@@ -388,7 +388,7 @@ def eighty_run_params():
     #lscale = 5.4772255750516621 / np.sqrt(ntrain)
     #obs_std = 1.0954451150103324 / np.sqrt(ntrain)
     lscale = 6.0 / np.sqrt(ntrain)
-    obs_std = 2.5 / np.sqrt(ntrain)
+    obs_std = 2.0 / np.sqrt(ntrain)
 
     for nblocks in local_nblocks:
         run_params_local = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 1.0, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0} 
@@ -431,7 +431,9 @@ def truegp_run_params():
     runs_fitc = []
 
     lscale = 6.0 / np.sqrt(ntrain)
-    obs_std = 2.5 / np.sqrt(ntrain)
+    obs_std = 2.0 / np.sqrt(ntrain)
+
+    init_true = False
 
     for nblocks in local_nblocks:
         run_params_local = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 1.0, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0} 
@@ -493,7 +495,7 @@ def fitc_run_params():
         #lscale = 5.4772255750516621 / np.sqrt(ntrain)
         #obs_std = 1.0954451150103324 / np.sqrt(ntrain)
         lscale = 6.0 / np.sqrt(ntrain)
-        obs_std = 2.5 / np.sqrt(ntrain)
+        obs_std = 2.0 / np.sqrt(ntrain)
 
         for blocksize in local_block_size:
             nblocks = get_nblocks(ntrain, blocksize)
@@ -718,6 +720,7 @@ def gen_runs():
     #runs_cov = cov_run_params_hard()
     #runs_xcov = xcov_run_params()
     cloud_base = "sudo su -c \"bash /home/sigvisa/python/gprf/run_cloud.sh gprfopt.py"
+    cloud_base_limited = "sudo su -c \"bash /home/sigvisa/python/gprf/run_cloud_limit.sh gprfopt.py"
     cloud_tail = "\" sigvisa"
 
     runs_eighty, _ = eighty_run_params()
@@ -726,7 +729,7 @@ def gen_runs():
 
     gen_runexp(runs_eighty, cloud_base, "run_cloud_eighty.sh", analyze=False, maxsec=86400, parallel=False, tail=cloud_tail)
     gen_runexp(runs_truegp, cloud_base, "run_cloud_truegp.sh", analyze=False, maxsec=18000, parallel=False, tail=cloud_tail)
-    gen_runexp(runs_fitc, cloud_base, "run_cloud_fitc.sh", analyze=False, maxsec=18000, parallel=False, tail=cloud_tail)
+    gen_runexp(runs_fitc, cloud_base_limited, "run_cloud_fitc.sh", analyze=False, maxsec=18000, parallel=False, tail=cloud_tail)
 
 
     #runs_lines = crazylines_run_gpy_params()
