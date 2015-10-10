@@ -78,6 +78,11 @@ class SampledData(object):
                     neighbors = self.neighbors if local_dist < 1.0 else [])
         return gprf
 
+    def mean_distance(self, x):
+        X = x.reshape(self.SX.shape)
+        ds = np.linalg.norm(X-self.SX, axis=1)
+        return np.mean(ds)
+
     def mean_abs_err(self, x):
         return np.mean(np.abs(x - self.SX.flatten()))
 
@@ -237,7 +242,6 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
     dim = sdata.SX.shape[1]
     # adjust kernel lengthscale to match GPy's defn of the RBF kernel incl a -.5 factor
     k = GPy.kern.RBF(dim, ARD=0, lengthscale=np.sqrt(.5)*sdata.lscale, variance=1.0)
-    #k = MWrapperLLD(dim, ARD=0, variance=1.0, distance_params=np.array([30.0, 30.0,]))
     k.lengthscale.fix()
     k.variance.fix()
 
@@ -247,7 +251,7 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
     if gplvm_type=="bayesian":
         print "bayesian GPLVM with %d inducing inputs" % num_inducing
         m = GPy.models.BayesianGPLVM(sdata.SY, dim, X=X0, X_variance = np.ones(XObs.shape)*sdata.obs_std**2, kernel=k, num_inducing=num_inducing)
-        m.X.mean.set_prior(p)
+        #m.X.mean.set_prior(p)
     elif gplvm_type=="sparse":
         print "sparse non-bayesian GPLVM with %d inducing inputs" % num_inducing
         m = GPy.models.SparseGPLVM(sdata.SY, dim, X=X0, kernel=k, num_inducing=num_inducing)
@@ -276,6 +280,12 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
         np.save(os.path.join(d, "step_%05d_X.npy" % sstep[0]), XX)
         ll, grad = m._objective_grads(xx)
 
+
+        prior_ll, prior_grad = sdata.x_prior(xx[:nmeans])
+        ll -= prior_ll
+        grad[:nmeans] -= prior_grad
+
+
         print "%d %.2f %.2f" % (sstep[0], time.time()-t0, -ll)
         f_log.write("%d %.2f %.2f\n" % (sstep[0], time.time()-t0, -ll))
         f_log.flush()
@@ -286,27 +296,6 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
             raise OutOfTimeError
 
         return ll, grad
-
-    def ll_wrapper(xx):
-        XX = xx[:nmeans].reshape(X0.shape)
-
-        np.save(os.path.join(d, "step_%05d_X.npy" % sstep[0]), XX)
-        ll = m._objective(xx)
-
-        print "%d %.2f %.2f" % (sstep[0], time.time()-t0, ll)
-        f_log.write("%d %.2f %.2f\n" % (sstep[0], time.time()-t0, ll))
-        f_log.flush()
-
-        sstep[0] += 1
-
-        if time.time()-t0 > maxsec:
-            raise OutOfTimeError
-
-        return ll
-
-    def grad_wrapper(xx):
-        grad = m._grads(xx)
-        return grad
 
     x0 = m.optimizer_array
     bounds = None
@@ -614,7 +603,7 @@ def analyze_run(d, sdata, local_dist=1.0, predict=False):
         except IOError:
             FC = None
 
-        l1 = sdata.mean_abs_err(X.flatten())
+        l1 = sdata.mean_distance(X.flatten())
         c1 = sdata.lscale_error(FC) if FC is not None else 0.00
         l2 = sdata.x_prior(X.flatten())[0]
         if predict:
@@ -630,7 +619,7 @@ def analyze_run(d, sdata, local_dist=1.0, predict=False):
         results.write(s + "\n")
 
     X = sdata.SX
-    l1 = sdata.mean_abs_err(X.flatten()) # = 0.0
+    l1 = sdata.mean_distance(X.flatten()) # = 0.0
     c1 = 0.0
     l2 = sdata.x_prior(X.flatten())[0]
     if predict:
@@ -843,7 +832,7 @@ def fast_analyze(d, sdata):
 
     fname_X = os.path.join(d, "step_%05d_X.npy" % step)
     X = np.load(fname_X)
-    l1 = sdata.mean_abs_err(X.flatten())
+    l1 = sdata.mean_distance(X.flatten())
     l2 = sdata.median_abs_err(X.flatten())
 
     s = "%.2f %.4f %.4f" % (times[best_idx], l1, l2)

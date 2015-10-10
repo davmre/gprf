@@ -89,9 +89,13 @@ def vis_points(run=None, d=None, sdata_file=None, y_target=0, seed=None, blocksi
         with open(sdata_file, 'rb') as f:
             sdata = pickle.load(f)
 
-    for fname in sorted(os.listdir(d)):
-        if not fname.startswith("step") or not fname.endswith("_X.npy"): continue
-        X = np.load(os.path.join(d,fname))
+    for fname in  ["true.xxx",] + sorted(os.listdir(d)):
+        if fname == "true.xxx":
+            X = sdata.SX
+        elif not fname.startswith("step") or not fname.endswith("_X.npy"): 
+            continue
+        else:
+            X = np.load(os.path.join(d,fname))
 
         fig = Figure(dpi=144)
         fig.patch.set_facecolor('white')
@@ -131,9 +135,14 @@ def vis_points(run=None, d=None, sdata_file=None, y_target=0, seed=None, blocksi
             c = sdata.SY[:, y_target:y_target+1].flatten()
             sargs['vmin'] = -3.0
             sargs['vmax'] = 3.0
+
+        npts = len(X)
+        xmax = np.sqrt(npts)
+        X *= xmax
+
         ax.scatter(X[:, 0], X[:, 1], alpha=0.4, c=c, cmap=cmap, s=25, marker='.', linewidths=0.0, **sargs)
-        ax.set_xlim((0,1))
-        ax.set_ylim((0,1))
+        ax.set_xlim((0,xmax))
+        ax.set_ylim((0,xmax))
 
         canvas = FigureCanvasAgg(fig)
 
@@ -433,24 +442,24 @@ def truegp_run_params():
     lscale = 6.0 / np.sqrt(ntrain)
     obs_std = 2.0 / np.sqrt(ntrain)
 
-    init_true = False
+    init_true = True
 
     for nblocks in local_nblocks:
-        run_params_local = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 1.0, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0} 
+        run_params_local = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 1.0, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0, "init_true": init_true} 
         runs_local.append(run_params_local)
 
         key = "Local-%d" % nblocks
         runs_by_key[key].append(run_params_local)
 
     for nblocks in gprf_nblocks:
-        run_params_gprf = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 0.1, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0} 
+        run_params_gprf = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 0.1, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0, "init_true": init_true} 
         runs_gprf.append(run_params_gprf)
 
         key = "GPRF-%d" % nblocks
         runs_by_key[key].append(run_params_gprf)
 
     for num_inducing in ns_inducing:
-        run_params_inducing = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed,  "method": method,  'task': 'x', 'noise_var': 0.01, 'gplvm_type': "sparse", 'num_inducing': num_inducing, "nblocks": 1, "local_dist": 1.0}
+        run_params_inducing = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed,  "method": method,  'task': 'x', 'noise_var': 0.01, 'gplvm_type': "sparse", 'num_inducing': num_inducing, "nblocks": 1, "local_dist": 1.0, "init_true": init_true}
         runs_fitc.append(run_params_inducing)
         key = "FITC-%d" % num_inducing
         runs_by_key[key].append(run_params_inducing)
@@ -462,7 +471,7 @@ def truegp_run_params():
 
     return runs, runs_by_key
 
-def fitc_run_params():
+def fitc_run_params(obs_std_base=2.0):
     yd = 50
     seed = 0
     method = "l-bfgs-b"
@@ -495,7 +504,7 @@ def fitc_run_params():
         #lscale = 5.4772255750516621 / np.sqrt(ntrain)
         #obs_std = 1.0954451150103324 / np.sqrt(ntrain)
         lscale = 6.0 / np.sqrt(ntrain)
-        obs_std = 2.0 / np.sqrt(ntrain)
+        obs_std = obs_std_base / np.sqrt(ntrain)
 
         for blocksize in local_block_size:
             nblocks = get_nblocks(ntrain, blocksize)
@@ -694,12 +703,15 @@ def gen_runexp(runs, base_cmd, outfile, tail="", analyze=False, parallel=True, m
     f_out = open(outfile, 'w')
 
     for run in runs:
-        args = ["--%s=%s" % (k,v) for (k,v) in sorted(run.items(), key=lambda x: x[0]) ]
+        args = ["--%s=%s" % (k,v) for (k,v) in sorted(run.items(), key=lambda x: x[0]) if k!= "init_true"]
+        
         if analyze:
             args.append("--analyze")
             args.append("--analyze_full")
         if parallel:
             args.append("--parallel")
+        if "init_true" in run and  run["init_true"]:
+            args.append("--init_true")
         if 'maxsec' not in run and maxsec is not None:
             args.append("--maxsec=%d" % maxsec)
         cmd = base_cmd + " " + " ".join(args)

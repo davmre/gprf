@@ -133,6 +133,7 @@ def sample_y(X, cov, noise_var, yd, sparse_lscales=4.0):
         Pinv = np.argsort(P)
         z = np.random.randn(n, yd)
         y = np.array((L * z)[Pinv])
+
     return y
 
 def sample_synthetic(seed=1, n=400, xd=2, yd=10, lscale=0.1, noise_var=0.01):
