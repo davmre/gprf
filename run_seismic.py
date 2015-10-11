@@ -605,11 +605,6 @@ def main():
         import pdb; pdb.set_trace()
         sys.exit(0)
 
-    cov_bad = np.load("step_00159_cov.npy")
-    cov_good = cov_bad.copy()
-    cov_good[0,:] = [0.1, 1.0, 40.0, 40.0]
-    gprf.discrepancy(cov_good, cov_bad)
-
 
     if not analyze:
         do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=args.maxsec, parallel=args.parallel, sparse=args.sparse)

@@ -126,6 +126,8 @@ class GPRF(object):
 
         wfn_var = self.cov.wfn_params[0]
 
+        maxk_cache = np.ones((self.n_blocks, self.n_blocks))
+
         for i in range(self.n_blocks):
             print "computing neighbors for block", i
             idxs = self.block_idxs[i]
@@ -138,6 +140,8 @@ class GPRF(object):
 
                 Kij = self.kernel(X1, X2=X2)/wfn_var
                 maxk = np.max(np.abs(Kij))
+                maxk_cache[i,j] = maxk
+                maxk_cache[j,i] = maxk
 
                 if maxk > threshold:
                     neighbors.append((i,j))
@@ -173,6 +177,7 @@ class GPRF(object):
         #i_start, i_end = self.block_boundaries[i]
         idxs = self.block_idxs[i]
         self.X[idxs] = new_X
+
 
     def llgrad(self, parallel=False, local=True, **kwargs):
         # overall likelihood is the pairwise potentials for all (unordered) pairs,
@@ -222,7 +227,7 @@ class GPRF(object):
             pair_gradCov = []
 
         ll = np.sum(pair_lls)
-        ll -= np.sum([(neighbor_count[i]-1)*ull for (i, ull) in enumerate(unary_lls) ])
+        ll += np.sum([(1-neighbor_count[i])*ull for (i, ull) in enumerate(unary_lls) ])
 
 
 
