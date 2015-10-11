@@ -115,10 +115,11 @@ def cov_prior(c):
     # add edges between all blocks with range of that new lengthscale, 
     # but this is a pain and would slow things down a lot, so instead 
     # we just discourage the optimizer from doing this. 
-    if c[0,2] > 200:
-        penalty = (c[0,2] - 200)**3
+    c = c.reshape((-1,))
+    if c[2] > 200:
+        penalty = (c[2] - 200)**3
         ll -= penalty
-        lderiv[0,2] -= (3*c[0,2]**2 - 1200 *c[0,2] + 120000)
+        lderiv[2] -= (3*c[2]**2 - 1200 *c[2] + 120000)
 
     return ll, lderiv
 
