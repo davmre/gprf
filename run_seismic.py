@@ -105,9 +105,21 @@ def cov_prior(c):
     means = np.array((-2.3, 0.0, 3.6, 3.6))
     std = 1.5
 
+
     r = (c-means)/std
     ll = -.5*np.sum( r**2)- .5 *len(c) * np.log(2*np.pi*std**2)
     lderiv = -(c-means)/(std**2)
+
+    # penalize pathologically large lengthscales. 
+    # if the optimizer tries a very large lengthscale, we *should*
+    # add edges between all blocks with range of that new lengthscale, 
+    # but this is a pain and would slow things down a lot, so instead 
+    # we just discourage the optimizer from doing this. 
+    if c[0,2] > 200:
+        penalty = (c[0,2] - 200)**3
+        ll -= penalty
+        lderiv[0,2] -= (3*c[0,2]**2 - 1200 *c[0,2] + 120000)
+
     return ll, lderiv
 
 def do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=3600, parallel=False, sparse=False):
@@ -592,6 +604,12 @@ def main():
         print "likelihood of initial state under true GP model:", ll
         import pdb; pdb.set_trace()
         sys.exit(0)
+
+    cov_bad = np.load("step_00159_cov.npy")
+    cov_good = cov_bad.copy()
+    cov_good[0,:] = [0.1, 1.0, 40.0, 40.0]
+    gprf.discrepancy(cov_good, cov_bad)
+
 
     if not analyze:
         do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=args.maxsec, parallel=args.parallel, sparse=args.sparse)
