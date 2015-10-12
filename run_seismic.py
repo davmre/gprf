@@ -108,18 +108,18 @@ def cov_prior(c):
 
     r = (c-means)/std
     ll = -.5*np.sum( r**2)- .5 *len(c) * np.log(2*np.pi*std**2)
-    lderiv = -(c-means)/(std**2)
+    lderiv = (-(c-means)/(std**2)).reshape((-1,))
 
-    # penalize pathologically large lengthscales. 
+    # penalize pathologically large lengthscales.
     # if the optimizer tries a very large lengthscale, we *should*
-    # add edges between all blocks with range of that new lengthscale, 
-    # but this is a pain and would slow things down a lot, so instead 
-    # we just discourage the optimizer from doing this. 
+    # add edges between all blocks with range of that new lengthscale,
+    # but this is a pain and would slow things down a lot, so instead
+    # we just discourage the optimizer from doing this.
     c = c.reshape((-1,))
-    if c[2] > 200:
-        penalty = (c[2] - 200)**3
+    if c[2] > 5:
+        penalty = np.exp(70*(c[2] - 5))
         ll -= penalty
-        lderiv[2] -= (3*c[2]**2 - 1200 *c[2] + 120000)
+        lderiv[2] -= 70 * np.exp(70*(c[2] - 5))
 
     return ll, lderiv
 
