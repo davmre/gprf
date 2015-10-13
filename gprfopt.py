@@ -242,7 +242,8 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
     dim = sdata.SX.shape[1]
     # adjust kernel lengthscale to match GPy's defn of the RBF kernel incl a -.5 factor
     k = GPy.kern.RBF(dim, ARD=0, lengthscale=np.sqrt(.5)*sdata.lscale, variance=1.0)
-    k.lengthscale.fix()
+    if C0 is None:
+        k.lengthscale.fix()
     k.variance.fix()
 
     XObs = sdata.X_obs.copy()
@@ -277,14 +278,21 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
     def llgrad_wrapper(xx):
         XX = xx[:nmeans].reshape(X0.shape)
 
+        xd = X0.shape[1]
+        n_ix = num_inducing * xd
+        IX = xx[nmeans:nmeans+n_ix].reshape((-1, xd))
+
         np.save(os.path.join(d, "step_%05d_X.npy" % sstep[0]), XX)
+        np.save(os.path.join(d, "step_%05d_IX.npy" % sstep[0]), IX)
         ll, grad = m._objective_grads(xx)
 
 
         prior_ll, prior_grad = sdata.x_prior(xx[:nmeans])
         ll -= prior_ll
         grad[:nmeans] -= prior_grad
-
+        
+        if C0 is not None:
+            print "lscale", np.exp(xx[-1])
 
         print "%d %.2f %.2f" % (sstep[0], time.time()-t0, -ll)
         f_log.write("%d %.2f %.2f\n" % (sstep[0], time.time()-t0, -ll))

@@ -97,6 +97,12 @@ def vis_points(run=None, d=None, sdata_file=None, y_target=0, seed=None, blocksi
         else:
             X = np.load(os.path.join(d,fname))
 
+        try:
+            ix_fname = fname.replace("_X", "_IX")
+            IX = np.load(os.path.join(d,ix_fname))
+        except:
+            IX = None
+
         fig = Figure(dpi=144)
         fig.patch.set_facecolor('white')
         ax = fig.add_subplot(111)
@@ -139,6 +145,11 @@ def vis_points(run=None, d=None, sdata_file=None, y_target=0, seed=None, blocksi
         npts = len(X)
         xmax = np.sqrt(npts)
         X *= xmax
+
+        if IX is not None:
+            IX *= xmax
+            ax.scatter(IX[:, 0], IX[:, 1], alpha=1.0, c="black", s=25, marker='o', linewidths=0.0, **sargs)
+
 
         ax.scatter(X[:, 0], X[:, 1], alpha=0.4, c=c, cmap=cmap, s=25, marker='.', linewidths=0.0, **sargs)
         ax.set_xlim((0,xmax))
@@ -430,7 +441,7 @@ def truegp_run_params():
     #ntrains = [5000, 10000, 15000, 20000]
     local_nblocks = [1, 9, 25, 49, 100]
     gprf_nblocks = [9, 25, 49, 100]
-    ns_inducing = [500, 1000, 2000, ]
+    ns_inducing = [200, 500, 1000, 2000, ]
     runs = []
     runs_by_key = defaultdict(list)
     ntrain = 10000
@@ -442,7 +453,7 @@ def truegp_run_params():
     lscale = 6.0 / np.sqrt(ntrain)
     obs_std = 2.0 / np.sqrt(ntrain)
 
-    init_true = True
+    init_true = False
 
     for nblocks in local_nblocks:
         run_params_local = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 1.0, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0, "init_true": init_true} 
@@ -478,9 +489,9 @@ def fitc_run_params(obs_std_base=2.0):
     ntest  = 500
 
     #ntrains = [5000, 10000, 15000, 20000]
-    ntrains = [10000, 15000, 20000, 25000, 30000, 35000, 40000]
+    ntrains = [2000, 5000, 10000, 15000, 20000, 25000, 30000, ]
 
-    ns_inducing = [500, 1000, 2000, 4000, ]
+    ns_inducing = [200, 500, 1000, 2000, 4000]
 
     def square_up(n):
         return int(np.ceil(np.sqrt(n)))
@@ -511,7 +522,7 @@ def fitc_run_params(obs_std_base=2.0):
             actual_blocksize = ntrain / float(nblocks)
             if actual_blocksize >= 8000: continue
             print ntrain, "target", blocksize, "actual", actual_blocksize
-            run_params_local = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 1.0, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0} 
+            run_params_local = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 1.0, "method": method, 'nblocks': nblocks, 'task': 'xcov', 'noise_var': 0.01, "num_inducing": 0} 
             runs_local.append(run_params_local)
 
             key = "Local-%d" % blocksize
@@ -519,14 +530,18 @@ def fitc_run_params(obs_std_base=2.0):
 
         for blocksize in gprf_block_size:
             nblocks = get_nblocks(ntrain, blocksize)
-            run_params_gprf = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 0.1, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0} 
+            run_params_gprf = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 0.1, "method": method, 'nblocks': nblocks, 'task': 'xcov', 'noise_var': 0.01, "num_inducing": 0} 
             runs_gprf.append(run_params_gprf)
 
             key = "GPRF-%d" % blocksize
             runs_by_key[key].append(run_params_gprf)
 
         for num_inducing in ns_inducing:
-            run_params_inducing = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed,  "method": method,  'task': 'x', 'noise_var': 0.01, 'gplvm_type': "sparse", 'num_inducing': num_inducing, "nblocks": 1, "local_dist": 1.0}
+            if num_inducing==4000 and ntrain > 15000: continue
+            if num_inducing==2000 and ntrain > 25000: continue
+            if num_inducing >= ntrain: continue
+
+            run_params_inducing = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed,  "method": method,  'task': 'xcov', 'noise_var': 0.01, 'gplvm_type': "sparse", 'num_inducing': num_inducing, "nblocks": 1, "local_dist": 1.0}
             runs_fitc.append(run_params_inducing)
             key = "FITC-%d" % num_inducing
             runs_by_key[key].append(run_params_inducing)
