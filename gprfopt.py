@@ -800,7 +800,8 @@ def do_run(d, lscale, n, ntrain, nblocks, yd, seed=0,
             C0 = np.exp(np.random.randn(1, 1)-1)
             X0 = X0 + np.random.randn(*X0.shape)*0.005
         else:
-            C0 = np.array((0.3)).reshape(1,1)
+            lscale = gprf.cov.dfn_params[0]
+            C0 = np.array((lscale)).reshape(1,1)
     else:
         raise Exception("unrecognized task "+ task)
 
