@@ -375,8 +375,9 @@ def do_optimization(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False)
     else:
         x0 = np.array(())
 
+    cov_scale = 5.
     if gradC:
-        c0 = np.log(C0.flatten())
+        c0 = np.log(C0.flatten()) * cov_scale
     else:
         c0 = np.array(())
     full0 = np.concatenate([x0, c0])
@@ -410,7 +411,7 @@ def do_optimization(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False)
             raise OutOfTimeError
 
         xx = x[:len(x0)]
-        xc = x[len(x0):]
+        xc = x[len(x0):] / cov_scale
 
         if gradX:
             XX = xx.reshape(X0.shape)
@@ -434,6 +435,7 @@ def do_optimization(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False)
             prior_ll, prior_grad = cov_prior(xc)
             ll += prior_ll
             gC = (np.array(collapse_cov_grad(gC)) * C).flatten() + prior_grad
+            gC /= cov_scale
 
         grad = np.concatenate([gX.flatten(), gC.flatten()])
 
