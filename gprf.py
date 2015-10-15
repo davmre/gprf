@@ -179,6 +179,30 @@ class GPRF(object):
         self.X[idxs] = new_X
 
 
+    def subset_llgrad(self, blocks):
+        # use only unaries in the subset, and only pair sbetween the
+        # subset. with correct counts.
+        n = len(blocks)
+        block_set = set(blocks)
+        neighbors_in_set = [(i,j) for (i,j) in self.neighbors if i in block_set and j in block_set]
+        local_neighbor_counts = defaultdict(int)
+        for (i,j) in neighbors_in_set:
+            local_neighbor_counts[i] += 1
+            local_neighbor_counts[j] += 1
+
+        unaries = [self.llgrad_unary(i, grad_X=False, grad_cov=False) for i in blocks]
+        pairs = [self.llgrad_joint(i, j, grad_X=False, grad_cov=False) for (i,j) in neighbors_in_set]
+
+        unary_lls, unary_gradX, unary_gradCov = zip(*unaries)
+        if len(pairs) > 0:
+            pair_lls, pair_gradX, pair_gradCov = zip(*pairs)
+        else:
+            pair_lls = []
+
+        ll = np.sum(pair_lls)
+        ll += np.sum([(1-local_neighbor_counts[blocks[i]])*ull for (i, ull) in enumerate(unary_lls) ])
+        return ll
+
     def llgrad(self, parallel=False, local=True, **kwargs):
         # overall likelihood is the pairwise potentials for all (unordered) pairs,
         # where each block is involved in (n-1) pairs. So we subtract each unary potential n-1 times.

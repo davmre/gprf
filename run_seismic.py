@@ -101,6 +101,7 @@ def load_kernel(fname, sd):
             myK[j, i] = k
     return myK
 
+
 def cov_prior(c):
     means = np.array((-2.3, 0.0, 3.6, 3.6))
     std = 1.5
@@ -123,6 +124,7 @@ def cov_prior(c):
 
     return ll, lderiv
 
+
 def do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=3600, parallel=False, sparse=False):
     gradX = (X0 is not None)
     gradC = (C0 is not None)
@@ -135,8 +137,10 @@ def do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=3600, parallel=F
     else:
         x0 = np.array(())
 
+    lscale_scale = 100.0
     if gradC:
-        c0 = np.log(C0.flatten())
+        c0 = np.log(C0.flatten()) 
+        #c0[2:] *= lscale_scale
     else:
         c0 = np.array(())
     full0 = np.concatenate([x0, c0])
@@ -161,7 +165,10 @@ def do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=3600, parallel=F
             gprf.update_X(XX)
             np.save(os.path.join(d, "step_%05d_X.npy" % sstep[0]), XX)
         if gradC:
-            FC = np.exp(xc.reshape(C0.shape))
+            #xc[2:]/= lscale_scale
+            XC = xc.reshape(C0.shape)
+            FC = np.exp(XC)
+            FC[0,1] = 1.0 # don't learn sv
             gprf.update_covs(FC)
             np.save(os.path.join(d, "step_%05d_cov.npy" % sstep[0]), FC)
 
@@ -172,7 +179,7 @@ def do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=3600, parallel=F
 
         gXl = np.linalg.norm(gX[:, 0])
         gXd = np.linalg.norm(gX[:, 2])
-        print "gradient norm lon %f, depth %f" % (gXl, gXd)
+        print "gradient norm lon %f, depth %f, cov %s" % (gXl, gXd, gC.flatten())
 
         if gradX:
             prior_ll, prior_grad = x_prior(XX)
@@ -184,6 +191,8 @@ def do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=3600, parallel=F
             ll += prior_ll
             gC = (gC * FC).flatten() + prior_grad
 
+        gC[1] = 0.0 # don't learn sv
+        gC[2:] /= lscale_scale
         grad = np.concatenate([gX.flatten(), gC.flatten()])
 
         print "%d %.2f %.2f" % (sstep[0], time.time()-t0, ll),
@@ -203,10 +212,11 @@ def do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=3600, parallel=F
         if time.time()-t0 > maxsec:
             raise OutOfTimeError
 
+
         return -ll, -grad
 
     try:
-        bounds = [(None, None),]*len(x0) + [(-12, 8)]*len(c0)
+        bounds = None
         r = scipy.optimize.minimize(lgpllgrad, full0, jac=True, method="l-bfgs-b", bounds=bounds)
         rx = r.x
     except OutOfTimeError:
@@ -605,6 +615,44 @@ def main():
         print "likelihood of initial state under true GP model:", ll
         import pdb; pdb.set_trace()
         sys.exit(0)
+
+    """
+    def probe_bad_subsets():
+        cov_bad = np.array(((  1.55755846e-01,   
+                               2.98095799e+03,   
+                               2.98095799e+03,   
+                               1.36171840e+00),),)
+
+        #blocks1 = np.arange(60, 90)
+        blocks1 = np.array([65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 89])
+        def eval_block(blocks):
+            gprf.update_covs(cov_true)
+            ll1 = gprf.subset_llgrad(blocks)
+            gprf.update_covs(cov_bad)
+            ll2 = gprf.subset_llgrad(blocks)
+            return ll2, ll1
+
+        best_new = blocks1
+        best_diff = -np.inf
+        for i in range(20):
+            current_blocks = best_new
+            print i, current_blocks, best_diff
+            best_new = None
+            best_diff = -np.inf
+            for j in range(len(current_blocks)):
+                new_blocks = np.concatenate((current_blocks[:j], current_blocks[j+1:]))
+                ll2, ll1 = eval_block(new_blocks)
+                diff = ll2-ll1
+                print "    ", j, diff
+                if diff > best_diff:
+                    best_diff = diff
+                    best_new = new_blocks
+
+        import pdb; pdb.set_trace()
+
+
+    probe_bad_subsets()
+    """
 
 
     if not analyze:

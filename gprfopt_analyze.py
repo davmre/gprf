@@ -489,9 +489,9 @@ def fitc_run_params(obs_std_base=2.0):
     ntest  = 500
 
     #ntrains = [5000, 10000, 15000, 20000]
-    ntrains = [2000, 5000, 10000, 15000, 20000, 25000, 30000, ]
+    ntrains = [2000, 5000, 10000, 15000, 20000, 25000, 30000, 35000, 40000, 45000]
 
-    ns_inducing = [200, 500, 1000, 2000, 4000]
+    ns_inducing = [200, 500, 1000, 2000, ]
 
     def square_up(n):
         return int(np.ceil(np.sqrt(n)))
@@ -500,8 +500,8 @@ def fitc_run_params(obs_std_base=2.0):
     def get_nblocks(ntrain, block_size_target):
         return square_down(ntrain / float(block_size_target))**2
 
-    local_block_size = [200,]
-    gprf_block_size = [200,]
+    local_block_size = [200,400]
+    gprf_block_size = [200,400]
 
     runs = []
 
@@ -537,8 +537,6 @@ def fitc_run_params(obs_std_base=2.0):
             runs_by_key[key].append(run_params_gprf)
 
         for num_inducing in ns_inducing:
-            if num_inducing==4000 and ntrain > 15000: continue
-            if num_inducing==2000 and ntrain > 25000: continue
             if num_inducing >= ntrain: continue
 
             run_params_inducing = {'ntrain': ntrain, 'n': ntrain+ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed,  "method": method,  'task': 'xcov', 'noise_var': 0.01, 'gplvm_type': "sparse", 'num_inducing': num_inducing, "nblocks": 1, "local_dist": 1.0}
