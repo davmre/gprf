@@ -137,7 +137,7 @@ def do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=3600, parallel=F
     else:
         x0 = np.array(())
 
-    lscale_scale = 100.0
+    lscale_scale = 5.0
     if gradC:
         c0 = np.log(C0.flatten()) 
         #c0[2:] *= lscale_scale
@@ -169,11 +169,25 @@ def do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=3600, parallel=F
             XC = xc.reshape(C0.shape)
             FC = np.exp(XC)
             FC[0,1] = 1.0 # don't learn sv
+            if FC[0,0] > 10.0:
+                FC[0,0] = 10.0
+            if FC[0,2] > 999:
+                FC[0,2] = 999
+            elif FC[0,2] < 1.0:
+                FC[0,2] = 1.0
+            if FC[0,3] > 999:
+                FC[0,3] = 999
+            elif FC[0,3] < 1.0:
+                FC[0,3] = 1.0
+            
             gprf.update_covs(FC)
             np.save(os.path.join(d, "step_%05d_cov.npy" % sstep[0]), FC)
 
-        ll, gX, gC = gprf.llgrad(local=True, grad_X=gradX, grad_cov=gradC,
-                                       parallel=parallel, sparse=sparse)
+        try:
+            ll, gX, gC = gprf.llgrad(local=True, grad_X=gradX, grad_cov=gradC,
+                                     parallel=parallel, sparse=sparse)
+        except:
+            return np.inf, 
         
         gX[:, 2] *= depth_scale
 
@@ -191,8 +205,12 @@ def do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=3600, parallel=F
             ll += prior_ll
             gC = (gC * FC).flatten() + prior_grad
 
-        gC[1] = 0.0 # don't learn sv
-        gC[2:] /= lscale_scale
+            gC[1] = 0.0 # don't learn sv
+
+            max_grad = np.max(np.abs(gC[2:]))
+            if max_grad > 10:
+                gC[2:] *= 2./(1  + max_grad/10.) 
+
         grad = np.concatenate([gX.flatten(), gC.flatten()])
 
         print "%d %.2f %.2f" % (sstep[0], time.time()-t0, ll),
