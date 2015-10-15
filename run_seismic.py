@@ -186,8 +186,9 @@ def do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=3600, parallel=F
         try:
             ll, gX, gC = gprf.llgrad(local=True, grad_X=gradX, grad_cov=gradC,
                                      parallel=parallel, sparse=sparse)
-        except:
-            return np.inf, 
+        except Exception as e:
+            print "fail", e
+            return 1e10, np.random.randn(*x.shape)
         
         gX[:, 2] *= depth_scale
 
