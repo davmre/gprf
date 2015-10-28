@@ -1,4 +1,5 @@
 import os
+import numpy as np
 from seismic.seismic_util import scraped_to_evid_dict
 from run_seismic import dist_lld
 from treegp.gp import sort_morton
