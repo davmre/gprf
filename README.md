@@ -14,9 +14,9 @@ After running a synthetic experiment, you can visualize the results, e.g., for t
 
     python gprfopt_analyze.py vis ~/gprf_experiments/10000_10500_100_0.060000_0.020000_1.0000_50_l-bfgs-b_x_-1_0.0100_s0_gprf0/ ~/gprf_experiments/synthetic_datasets/10500_10000_0.060000_0.020000_50_0.pkl 0
 
-will generate a series of images, one for each optimization step, and attempt to stich them into a video. 
+will generate a series of images, one for each optimization step, and attempt to stitch them into a video. 
 
-The seismic dataset, consisting of an array of (lon, lat, depth) values, is stored in `sorted_isc.npy`. Individual seismic experiments can be reproduced by `run_seismic.py`. For example,
+The seismic dataset is stored in `sorted_isc.npy` as an array of (lon, lat, depth) values. Individual seismic experiments can be reproduced by `run_seismic.py`. For example,
 
     python run_seismic.py --obs_std=20.0 --rpc_blocksize=210  --task=xcov --threshold=0.6  --maxsec=345600
 
@@ -30,6 +30,6 @@ value is at least 0.6 (corresponding to one kernel lengthscale), and running
 for at most 345600 seconds (four days). The results will be saved under the home 
 directory in `~/seismic_experiments/`. 
 
-To automatically generate the full set of synthetic experiments from the paper, run `gprfopt_analyze.py` with no arguments: this will generate Bash scripts `run_truegp.sh`, `run_fitc.sh`, and `run_eighty.sh`. The iPython notebook `gprf_camera_plot.ipynb` was used to generate the plots in the paper, based on results which are included in the tarballs `gprf_experiments.tgz` and `seismic_experiments.tgz`. 
+To automatically generate the full set of synthetic experiments from the paper, run `python gprfopt_analyze.py` with no arguments: this will generate Bash scripts `run_truegp.sh`, `run_fitc.sh`, and `run_eighty.sh`. The iPython notebook `gprf_camera_plot.ipynb` was used to generate the plots in the paper, based on results which are included in the tarballs `gprf_experiments.tgz` and `seismic_experiments.tgz`. 
 
-For questions about the paper or if you have difficulty running the code (this is likely!) or reproducing the experimental results, please contact Dave Moore at dmoore@cs.berkeley.edu. 
+For questions about the paper, or if you have difficulty running the code or reproducing the experimental results, please contact Dave Moore at dmoore@cs.berkeley.edu. 
