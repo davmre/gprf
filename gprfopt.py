@@ -587,13 +587,13 @@ def do_run(d, lscale, n, ntrain, nblocks, yd, seed=0,
 
 def build_run_name(args):
     try:
-        ntrain, ntest, nblocks, lscale, obs_std, local_dist, yd, method, task, init_seed, noise_var, rpc_blocksize, seed, gplvm_type, num_inducing, init_true = (args.n+args.ntest, args.ntest, args.nblocks, args.lscale, args.obs_std, args.local_dist, args.yd, args.method, args.task, args.init_seed, args.noise_var, args.rpc_blocksize, args.seed, args.gplvm_type, args.num_inducing, args.init_true)
+        ntrain, ntest, nblocks, lscale, obs_std, local_dist, yd, method, task, init_seed, noise_var, rpc_blocksize, seed, gplvm_type, num_inducing, init_true = (args.ntrain, args.ntest, args.nblocks, args.lscale, args.obs_std, args.local_dist, args.yd, args.method, args.task, args.init_seed, args.noise_var, args.rpc_blocksize, args.seed, args.gplvm_type, args.num_inducing, args.init_true)
     except:
         defaults = { 'yd': 50, 'seed': 0, 'local_dist': 0.05, "method": 'l-bfgs-b', 'task': 'x', 'init_seed': -1, 'noise_var': 0.01, 'rpc_blocksize': -1, 'gplvm_type': "gprf", 'num_inducing': -1, 'init_true': False}
         defaults.update(args)
         args = defaults
-        ntrain, ntest, nblocks, lscale, obs_std, local_dist, yd, method, task, init_seed, noise_var, rpc_blocksize, seed, gplvm_type, num_inducing, init_true = (args['n'], args['ntest'], args['nblocks'], args['lscale'], args['obs_std'], args['local_dist'], args['yd'], args['method'], args['task'], args['init_seed'], args['noise_var'], args['rpc_blocksize'], args['seed'], args['gplvm_type'], args['num_inducing'], args["init_true"])
-    run_name = "%d_%d_%s_%.6f_%.6f_%.4f_%d_%s_%s_%d_%s_s%s_%s%d" % (ntrain+ntest, ntrain, "%d" % nblocks if rpc_blocksize==-1 else "%06d" % rpc_blocksize, lscale, obs_std, local_dist, yd, method, task, -9999 if init_true else init_seed, "%.4f" % noise_var, "%d" % seed, gplvm_type, num_inducing)
+        ntrain, ntest, nblocks, lscale, obs_std, local_dist, yd, method, task, init_seed, noise_var, rpc_blocksize, seed, gplvm_type, num_inducing, init_true = (args['ntrain'], args['ntest'], args['nblocks'], args['lscale'], args['obs_std'], args['local_dist'], args['yd'], args['method'], args['task'], args['init_seed'], args['noise_var'], args['rpc_blocksize'], args['seed'], args['gplvm_type'], args['num_inducing'], args["init_true"])
+    run_name = "%d_%d_%s_%.6f_%.6f_%.4f_%d_%s_%s_%d_%s_s%s_%s%d" % (ntrain, ntrain+ntest, "%d" % nblocks if rpc_blocksize==-1 else "%06d" % rpc_blocksize, lscale, obs_std, local_dist, yd, method, task, -9999 if init_true else init_seed, "%.4f" % noise_var, "%d" % seed, gplvm_type, num_inducing)
     return run_name
 
 def exp_dir(args):
@@ -607,7 +607,7 @@ def main():
     mkdir_p(EXP_DIR)
 
     parser = argparse.ArgumentParser(description='gprf_opt')
-    parser.add_argument('--n', dest='n', type=int, help="number of points to locate")
+    parser.add_argument('--ntrain', dest='ntrain', type=int, help="number of points to locate")
     parser.add_argument('--ntest', dest='ntest', type=int, default=500, help="sample additional test points to evaluate predictive accuracy (not in paper)")
     parser.add_argument('--nblocks', dest='nblocks', default=1, type=int, help="divides the sampled points into a grid of this many blocks. May do strange things if number is not a perfect square. Mutually exclusive with rpc_blocksize. ")
     parser.add_argument('--rpc_blocksize', dest='rpc_blocksize', default=-1, type=int, help="divides the sampled points into blocks using recursive projection clustering, aiming for this target blocksize. Mutually exclusive with nblocks. ")
@@ -631,7 +631,7 @@ def main():
     args = parser.parse_args()
 
     d = exp_dir(args)
-    do_run(d=d, lscale=args.lscale, obs_std=args.obs_std, local_dist=args.local_dist, n=args.n+args.ntest, ntrain=args.n, nblocks=args.nblocks, yd=args.yd, method=args.method, rpc_blocksize=args.rpc_blocksize, seed=args.seed, maxsec=args.maxsec, analyze_only=args.analyze, analyze_full = args.analyze_full, task=args.task, init_seed=args.init_seed, noise_var=args.noise_var, parallel=args.parallel, gplvm_type=args.gplvm_type, num_inducing=args.num_inducing, init_true=args.init_true)
+    do_run(d=d, lscale=args.lscale, obs_std=args.obs_std, local_dist=args.local_dist, n=args.ntrain+args.ntest, ntrain=args.ntrain, nblocks=args.nblocks, yd=args.yd, method=args.method, rpc_blocksize=args.rpc_blocksize, seed=args.seed, maxsec=args.maxsec, analyze_only=args.analyze, analyze_full = args.analyze_full, task=args.task, init_seed=args.init_seed, noise_var=args.noise_var, parallel=args.parallel, gplvm_type=args.gplvm_type, num_inducing=args.num_inducing, init_true=args.init_true)
 
 if __name__ == "__main__":
     main()

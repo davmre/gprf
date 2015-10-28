@@ -207,14 +207,14 @@ def eighty_run_params():
     obs_std = 2.0 / np.sqrt(ntrain)
 
     for nblocks in local_nblocks:
-        run_params_local = {'n': ntrain, 'ntest': ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 1.0, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0} 
+        run_params_local = {'ntrain': ntrain, 'ntest': ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 1.0, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0} 
         runs_local.append(run_params_local)
 
         key = "Local-%d" % nblocks
         runs_by_key[key].append(run_params_local)
 
     for nblocks in gprf_nblocks:
-        run_params_gprf = {'n': ntrain, 'ntest': ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 0.1, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0} 
+        run_params_gprf = {'ntrain': ntrain, 'ntest': ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 0.1, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0} 
         runs_gprf.append(run_params_gprf)
 
         key = "GPRF-%d" % nblocks
@@ -258,14 +258,14 @@ def truegp_run_params():
         runs_by_key[key].append(run_params_local)
 
     for nblocks in gprf_nblocks:
-        run_params_gprf = {'n': ntrain, 'ntest': ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 0.1, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0, "init_true": init_true} 
+        run_params_gprf = {'ntrain': ntrain, 'ntest': ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 0.1, "method": method, 'nblocks': nblocks, 'task': 'x', 'noise_var': 0.01, "num_inducing": 0, "init_true": init_true} 
         runs_gprf.append(run_params_gprf)
 
         key = "GPRF-%d" % nblocks
         runs_by_key[key].append(run_params_gprf)
 
     for num_inducing in ns_inducing:
-        run_params_inducing = {'n': ntrain, 'ntest': ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed,  "method": method,  'task': 'x', 'noise_var': 0.01, 'gplvm_type': "sparse", 'num_inducing': num_inducing, "nblocks": 1, "local_dist": 1.0, "init_true": init_true}
+        run_params_inducing = {'ntrain': ntrain, 'ntest': ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed,  "method": method,  'task': 'x', 'noise_var': 0.01, 'gplvm_type': "sparse", 'num_inducing': num_inducing, "nblocks": 1, "local_dist": 1.0, "init_true": init_true}
         runs_fitc.append(run_params_inducing)
         key = "FITC-%d" % num_inducing
         runs_by_key[key].append(run_params_inducing)
@@ -317,7 +317,7 @@ def fitc_run_params(obs_std_base=2.0):
             actual_blocksize = ntrain / float(nblocks)
             if actual_blocksize >= 8000: continue
             print ntrain, "target", blocksize, "actual", actual_blocksize
-            run_params_local = {'n': ntrain, 'ntest': ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 1.0, "method": method, 'nblocks': nblocks, 'task': 'xcov', 'noise_var': 0.01, "num_inducing": 0} 
+            run_params_local = {'ntrain': ntrain, 'ntest': ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 1.0, "method": method, 'nblocks': nblocks, 'task': 'xcov', 'noise_var': 0.01, "num_inducing": 0} 
             runs_local.append(run_params_local)
 
             key = "Local-%d" % blocksize
@@ -325,7 +325,7 @@ def fitc_run_params(obs_std_base=2.0):
 
         for blocksize in gprf_block_size:
             nblocks = get_nblocks(ntrain, blocksize)
-            run_params_gprf = {'n': ntrain, 'ntest': ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 0.1, "method": method, 'nblocks': nblocks, 'task': 'xcov', 'noise_var': 0.01, "num_inducing": 0} 
+            run_params_gprf = {'ntrain': ntrain, 'ntest': ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed, 'local_dist': 0.1, "method": method, 'nblocks': nblocks, 'task': 'xcov', 'noise_var': 0.01, "num_inducing": 0} 
             runs_gprf.append(run_params_gprf)
 
             key = "GPRF-%d" % blocksize
@@ -334,7 +334,7 @@ def fitc_run_params(obs_std_base=2.0):
         for num_inducing in ns_inducing:
             if num_inducing >= ntrain: continue
 
-            run_params_inducing = {'n': ntrain, 'ntest': ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed,  "method": method,  'task': 'xcov', 'noise_var': 0.01, 'gplvm_type': "sparse", 'num_inducing': num_inducing, "nblocks": 1, "local_dist": 1.0}
+            run_params_inducing = {'ntrain': ntrain, 'ntest': ntest, 'lscale': lscale, 'obs_std': obs_std, 'yd': yd, 'seed': seed,  "method": method,  'task': 'xcov', 'noise_var': 0.01, 'gplvm_type': "sparse", 'num_inducing': num_inducing, "nblocks": 1, "local_dist": 1.0}
             runs_fitc.append(run_params_inducing)
             key = "FITC-%d" % num_inducing
             runs_by_key[key].append(run_params_inducing)
