@@ -1,6 +1,6 @@
-from gprf import GPRF, Blocker
-from gprfopt import cluster_rpc, OutOfTimeError, load_log
-from seismic.seismic_util import scraped_to_evid_dict
+from gprf import GPRF
+from gprfopt import OutOfTimeError, load_log
+
 from pdtree_clustering import pdtree_cluster
 from synthetic import sample_y
 
@@ -62,44 +62,8 @@ def dist_km(loc1, loc2):
 
     return d
 
-#COL_IDX, COL_EVID, COL_LON, COL_LAT, COL_SMAJ, COL_SMIN, COL_STRIKE, COL_DEPTH, COL_DEPTHERR = np.arange(9)
 COL_TIME, COL_TIMEERR, COL_LON, COL_LAT, COL_SMAJ, COL_SMIN, COL_STRIKE, COL_DEPTH, COL_DEPTHERR = np.arange(9)
 
-def load_seismic_locations():
-    fname = os.path.join(os.environ['HOME'],"aligned_data.npy")
-    fnameY = os.path.join(os.environ['HOME'], "aligned_Y.npy")
-    d=  np.load(fname)
-    Y=  np.load(fnameY)
-    return d, Y
-
-def select_subset(full_data, Y, npts, center=None):
-    if center is None:
-        center = (135.73395, -3.6592229)
-
-    n = full_data.shape[0]
-    distances = [dist_km(center, (full_data[i, COL_LON], full_data[i, COL_LAT])) for i in range(n)]
-    perm = np.array(sorted(np.arange(n), key = lambda i : distances[i]))
-    selected = perm[:npts]
-    return full_data[selected], Y[selected]
-
-def load_kernel(fname, sd):
-    fullK = np.memmap(fname, dtype='float32', mode='r', shape=(20473, 20473))
-
-    n = sd.shape[0]
-    myK = np.zeros((n,n), np.float32)
-    for i, sd1 in enumerate(sd):
-        idx1 = sd1[COL_IDX]
-        myK[i,i] = 1.0
-        for j, sd2 in enumerate(sd[:i]):
-            idx2 = sd2[COL_IDX]
-            min_idx = min(idx1, idx2)
-            max_idx = max(idx1, idx2)
-            k = fullK[max_idx, min_idx]
-            if not np.isfinite(k):
-                k = 0.0
-            myK[i,j] = k
-            myK[j, i] = k
-    return myK
 
 
 def cov_prior(c):
@@ -249,125 +213,12 @@ def do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=3600, parallel=F
 
     with open(os.path.join(d, "finished"), 'w') as f:
         f.write("")
-
-
-def get_idc_as_sd():
-    homedir = os.getenv("HOME")
-    idc_dict = scraped_to_evid_dict(os.path.join(homedir, "python/gprf/idc.txt"))
-    isc_dict = scraped_to_evid_dict(os.path.join(homedir, "python/gprf/isc.txt"))
-
-    sd = []
-    for evid in isc.keys():
-        sd.append(idc_dict[evid])
-    return sd
         
-def build_prior(sd):
-
-    def azimuth_vector(azi_deg):
-        angle_deg = 90 - azi_deg
-        angle_rad = angle_deg * np.pi/180.0
-        return np.array((np.cos(angle_rad), np.sin(angle_rad)))
-
-    def normal_vec(v1):
-        return np.array((-v1[1], v1[0]))
-
-    def cov_matrix_km(azi_deg, var1, var2):
-        v1 = azimuth_vector(azi_deg).reshape((-1, 1))
-        v2 = normal_vec(v1).reshape((-1, 1))
-        V = np.hstack((v1, v2))
-        D = np.diag((var1, var2))
-        return np.dot(V, np.dot(D, V.T))
-
-    def conf_to_var(x, confidence=0.9):
-        one_sided = 1.0 - (1.0-confidence)/2
-        z = scipy.stats.norm.ppf(one_sided)
-        stddev = x/z
-        return stddev**2
-
-    def linear_interpolate(x, keys, values):
-        idx = np.searchsorted(keys, x, side="right")-1
-        k1, k2 = keys[idx], keys[idx+1]
-        v1, v2 = values[idx], values[idx+1]
-        slope = (v2-v1)/(k2-k1)
-        return v1 + (x-k1)*slope
-
-    def degree_in_km(lat):
-        # source: http://en.wikipedia.org/wiki/Latitude#Length_of_a_degree_of_latitude
-        refs = np.array([0, 15, 30, 45, 60, 75, 90])
-        lat_table = [110.574, 110.649, 110.852, 111.132, 111.412, 111.618, 111.694]
-        lon_table = [111.320, 107.550, 96.486, 78.847, 55.800, 28.902, 0.000]
-        alat = np.abs(lat)
-        return linear_interpolate(alat, refs, lon_table), linear_interpolate(alat, refs, lat_table)
-
-    def cov_km_to_deg(lat, C):
-        klon, klat = degree_in_km(lat)
-        L = np.diag((1.0/klon, 1.0/klat))
-        return np.dot(L, np.dot(C, L.T))
-
-    def uncertainty_to_cov(smaj, smin, strike, lat):
-        #x1 = ellipse.max_horizontal_uncertainty
-        #x2 = ellipse.min_horizontal_uncertainty
-        #azi_deg = ellipse.azimuth_max_horizontal_uncertainty
-        #C = cov_matrix_km(azi_deg, conf_to_var(x1), conf_to_var(x2))
-        if smaj < 0.5:
-            smaj = 0.5
-        if smin < 0.5:
-            smin = 0.5
-        C = cov_matrix_km(strike, conf_to_var(smaj), conf_to_var(smin))
-        CC = cov_km_to_deg(lat, C)
-        return CC
-
-    means = []
-    covs = []
-    for row in sd:
-        means.append((row[COL_LON], row[COL_LAT], row[COL_DEPTH]))
-        cov = np.zeros((3,3))
-        cov[:2, :2] = uncertainty_to_cov(row[COL_SMAJ], row[COL_SMIN], row[COL_STRIKE], row[COL_LAT])
-
-        deptherr = row[COL_DEPTHERR]
-        if deptherr <= 20.0:
-            deptherr = 40.0
-        #if row[COL_DEPTH] == 0:
-        #    print deptherr
-        cov[2,2] = conf_to_var(deptherr)
-
-        #cov *= 4
-        covs.append(cov)
-    means = np.array(means)
-
-    precs = [np.linalg.inv(cov) for cov in covs]
-    logdets = [np.linalg.slogdet(cov)[1] for cov in covs]
-
-    def event_prior_llgrad(X):
-        R = X - means
-        rlons = R[:, 0]
-        R[:, 0] = ((rlons + 180) % 360) - 180
-        grad = np.zeros(R.shape)
-        ll = 0
-        for i, row in enumerate(R):
-            alpha = np.dot(precs[i], row)
-            rowll = 0
-            rowll -= .5 * np.dot(row, alpha)
-            rowll -= .5 * logdets[i]
-            rowll -= .5 * np.log(2*np.pi)
-            grad[i, :] = -alpha
-            ll += rowll
-            #if rowll < -100:
-            #    import pdb; pdb.set_trace()
-        return ll, grad
-
-    shallow = means[:, 2] < 40
-    dd = means.copy()
-    n = np.sum(shallow)
-    dd[shallow, 2] = np.random.rand(n) * 40
-    #import pdb; pdb.set_trace()
-
-    return dd, event_prior_llgrad
 
 def seismic_exp_dir(args):
     npts, block_size, thresh, init_cov, init_x, task, synth_lscale, obs_std = args.npts, args.rpc_blocksize, args.threshold, args.init_cov, args.init_x, args.task, args.synth_lscale, args.obs_std
     import hashlib
-    base_dir = "seismic_experiments"
+    base_dir = os.path.join(os.environ["HOME"], "seismic_experiments")
     init_str = "default"
     if init_cov or init_x:
         init_str = "_%s" % hashlib.md5(init_cov+init_x).hexdigest()[:8]
@@ -436,48 +287,9 @@ def analyze_run_result(args, gprf, x_prior, X_true, cov_true, lscale_true):
     results.write(s + "\n")
     results.close()
 
-
-
 def load_data(synth_lscale, seed):
-    try:
-        sorted_idc = np.load("sorted_idc.npy")
-        sorted_isc = np.load("sorted_isc.npy")
-        sorted_evids = np.load("sorted_evids.npy")
-    except IOError:
-        homedir = os.getenv("HOME")
-        idc_dict = scraped_to_evid_dict(os.path.join(homedir, "python/gprf/idc.txt"))
-        isc_dict = scraped_to_evid_dict(os.path.join(homedir, "python/gprf/isc.txt"))
-
-        idc = []
-        isc = []
-        keyerror = 0
-        evids = []
-        for evid in isc_dict.keys():
-            try:
-                idc.append(idc_dict[evid])
-                isc.append(isc_dict[evid])
-                evids.append(evid)
-            except KeyError:
-                keyerror += 1
-        idc = np.asarray(idc)
-        isc = np.asarray(isc)
-        evids = np.asarray(evids)
-        n = len(idc)
-
-        dists = np.asarray([dist_lld(idc[i, (COL_LON, COL_LAT, COL_DEPTH)], isc[i, (COL_LON, COL_LAT, COL_DEPTH)] ) for i in range(n)])
-        inliers = dists < 3*idc[:, COL_SMAJ]
-        idc = idc[inliers]
-        isc = isc[inliers]
-
-        XX = idc[:, [COL_LON, COL_LAT]]
-        sorted_XX, sorted_idc, sorted_isc, sorted_evids = sort_morton(XX, idc, isc, evids)
-
-        print "loaded X", len(idc), "from", n
-        np.save("sorted_idc.npy", sorted_idc)
-        np.save("sorted_isc.npy", sorted_isc)
-        np.save("sorted_evids.npy", sorted_evids)
-
-    #sorted_idc[:, COL_DEPTH] = sorted_isc[:, COL_DEPTH]
+    # load file generated by seismic/generate_sorted.py
+    sorted_isc = np.load("sorted_isc.npy")
 
     np.random.seed(seed)
     XX = sorted_isc[:, [COL_LON, COL_LAT, COL_DEPTH]].copy()
@@ -486,60 +298,31 @@ def load_data(synth_lscale, seed):
         SY = np.load(y_fname)
         cov = GPCov(wfn_params=[1.0], dfn_params=[synth_lscale,synth_lscale], dfn_str="lld", wfn_str="matern32")
     except:
-        if synth_lscale == -1:
-            SY = load_fourier(sorted_evids)
-        else:
-            cov = GPCov(wfn_params=[1.0], dfn_params=[synth_lscale,synth_lscale], dfn_str="lld", wfn_str="matern32")
-            SY = sample_y(XX, cov, 0.1, 50, sparse_lscales=6.0)
-
-            print "sampled Y"
+        cov = GPCov(wfn_params=[1.0], dfn_params=[synth_lscale,synth_lscale], dfn_str="lld", wfn_str="matern32")
+        SY = sample_y(XX, cov, 0.1, 50, sparse_lscales=6.0)
         np.save(y_fname, SY)
+        print "sampled Y, saved to", y_fname
 
-    if synth_lscale == -1:
-        cov = GPCov(wfn_params=[1.0], dfn_params=[40.0,40.0], dfn_str="lld", wfn_str="matern32")
+    return sorted_isc, SY, cov
 
-    return sorted_idc, sorted_isc, SY, cov
-
-def load_fourier(evids):
-    homedir = os.getenv("HOME")
-    fourier = np.load(os.path.join(homedir, "python/gprf/fourier_signals.npy"))
-    n = fourier.shape[0]
-    evid_idx = {}
-    for i in range(n):
-        evid = int(fourier[i,0])
-        evid_idx[evid] = i
-
-    Y = []
-    for evid in evids:
-        idx = evid_idx[int(evid)]
-        y = fourier[idx, 1:]
-        if np.isnan(y).any():
-            y[:] = 0
-        Y.append(y)
-    Y = np.asarray(Y)
-    Y -= np.mean(Y, axis=0)
-    Y /= np.std(Y)
-    return Y
 
 def main():
 
     parser = argparse.ArgumentParser(description='seismic')
 
-    parser.add_argument('--npts', dest='npts', default=-1, type=int)
-    parser.add_argument('--obs_std', dest='obs_std', default=-1, type=float)
-    parser.add_argument('--threshold', dest='threshold', default=1.0, type=float)
-    parser.add_argument('--seed', dest='seed', default=0, type=int)
-    parser.add_argument('--maxsec', dest='maxsec', default=3600, type=int)
-    parser.add_argument('--sparse', dest='sparse', default=False, action="store_true")
-    parser.add_argument('--analyze', dest='analyze', default=False, action="store_true")
-    parser.add_argument('--analyze_init', dest='analyze_init', default=False, action="store_true")
-    parser.add_argument('--rpc_blocksize', dest='rpc_blocksize', default=300, type=int)
-    parser.add_argument('--init_cov', dest='init_cov', default="", type=str)
-    parser.add_argument('--init_x', dest='init_x', default="", type=str)
-    parser.add_argument('--synth_lscale', dest='synth_lscale', default=40.0, type=float)
-    #parser.add_argument('--prior', dest='prior', default="isc", type=str)
-    parser.add_argument('--task', dest='task', default="x", type=str)
-    parser.add_argument('--parallel', dest='parallel', default=False, action="store_true")
+    parser.add_argument('--npts', dest='npts', default=-1, type=int, help="do inference on a subset of data, for debugging")
+    parser.add_argument('--obs_std', dest='obs_std', default=-1, type=float, help="stddev for sampling observed X values")
+    parser.add_argument('--threshold', dest='threshold', default=1.0, type=float, help="covariance threshold for adding a GPRF edge. 1.0 is local GPs, 0.6 is approx. one lengthscale.")
+    parser.add_argument('--synth_lscale', dest='synth_lscale', default=40.0, type=float, help="Matern kernel lengthscale for generating Y values")
+    parser.add_argument('--seed', dest='seed', default=0, type=int, help="seed for sampling ")
+    parser.add_argument('--maxsec', dest='maxsec', default=3600, type=int, help="maximum number of seconds to run inference (3600)")
+    parser.add_argument('--sparse', dest='sparse', default=False, action="store_true", help="use sparse rather than dense linear algebra for GP operations on each block. note this is NOT the same sense of sparsity as in inducing point methods. (False)")
+    parser.add_argument('--analyze', dest='analyze', default=False, action="store_true", help="do no inference; just generate results from currently saved inference state")
+    parser.add_argument('--rpc_blocksize', dest='rpc_blocksize', default=300, type=int, help="partition points into blocks of (no more than) this size.")
+    parser.add_argument('--init_cov', dest='init_cov', default="", type=str, help="initialize with cov params from a file (.npy)")
+    parser.add_argument('--init_x', dest='init_x', default="", type=str, help="initialize with X locations from a file (.npy)")
+    parser.add_argument('--task', dest='task', default="xcov", type=str, help="'x', 'cov', or 'xcov' to infer locations, cov params, or both")
+    parser.add_argument('--parallel', dest='parallel', default=False, action="store_true", help="use multiple threads to process blocks in parallel.")
 
     args = parser.parse_args()
     d = seismic_exp_dir(args)
@@ -554,7 +337,7 @@ def main():
     analyze = args.analyze
     synth_lscale = args.synth_lscale
 
-    sorted_idc, sorted_isc, SY, cov = load_data(synth_lscale, seed)
+    sorted_isc, SY, cov = load_data(synth_lscale, seed)
 
     np.random.seed(seed)
     cov_true = np.array([0.1, cov.wfn_params[0], cov.dfn_params[0], cov.dfn_params[1]]).reshape((1, -1))
@@ -566,30 +349,26 @@ def main():
     if args.npts > 0:
         npts = args.npts
         base = 60000
-        sorted_idc = sorted_idc[base:base+npts, :]
         sorted_isc = sorted_isc[base:base+npts, :]
         SY = SY[base:base+npts, :]
     else:
         npts = len(SY)
     
     X_true = sorted_isc[:, (COL_LON, COL_LAT, COL_DEPTH)]
-    if obs_std < 0:
-        X0, x_prior = build_prior(sorted_idc)
-    else:
-        np.random.seed(seed)
-        prior_std = obs_std * np.array([.01, .01, 1.])
-        noise = np.random.randn(*X_true.shape) * prior_std
-        means = X_true + noise
-        X0 = means.copy()
-        def x_prior(X):
-            r = (X-means)/prior_std
-            r2 = r/prior_std
-            r = r.flatten()
-            r2 = r2.flatten()
-            n = X.shape[0]
-            ll = -.5*np.sum( r**2)- .5 *n * (3*np.log(2*np.pi) +np.sum(np.log(prior_std**2)))
-            lderiv = -r2.reshape(X.shape)
-            return ll, lderiv            
+    np.random.seed(seed)
+    prior_std = obs_std * np.array([.01, .01, 1.])
+    noise = np.random.randn(*X_true.shape) * prior_std
+    means = X_true + noise
+    X0 = means.copy()
+    def x_prior(X):
+        r = (X-means)/prior_std
+        r2 = r/prior_std
+        r = r.flatten()
+        r2 = r2.flatten()
+        n = X.shape[0]
+        ll = -.5*np.sum( r**2)- .5 *n * (3*np.log(2*np.pi) +np.sum(np.log(prior_std**2)))
+        lderiv = -r2.reshape(X.shape)
+        return ll, lderiv            
 
     n = X0.shape[0]
     all_idxs = np.arange(n)
@@ -628,51 +407,6 @@ def main():
         C0 = None
     elif task=="cov":
         X0 = None
-
-    if args.analyze_init:
-        ll, _, _ = gprf.gaussian_llgrad(X0, gprf.Y)
-        print "likelihood of initial state under true GP model:", ll
-        import pdb; pdb.set_trace()
-        sys.exit(0)
-
-    """
-    def probe_bad_subsets():
-        cov_bad = np.array(((  1.55755846e-01,   
-                               2.98095799e+03,   
-                               2.98095799e+03,   
-                               1.36171840e+00),),)
-
-        #blocks1 = np.arange(60, 90)
-        blocks1 = np.array([65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 89])
-        def eval_block(blocks):
-            gprf.update_covs(cov_true)
-            ll1 = gprf.subset_llgrad(blocks)
-            gprf.update_covs(cov_bad)
-            ll2 = gprf.subset_llgrad(blocks)
-            return ll2, ll1
-
-        best_new = blocks1
-        best_diff = -np.inf
-        for i in range(20):
-            current_blocks = best_new
-            print i, current_blocks, best_diff
-            best_new = None
-            best_diff = -np.inf
-            for j in range(len(current_blocks)):
-                new_blocks = np.concatenate((current_blocks[:j], current_blocks[j+1:]))
-                ll2, ll1 = eval_block(new_blocks)
-                diff = ll2-ll1
-                print "    ", j, diff
-                if diff > best_diff:
-                    best_diff = diff
-                    best_new = new_blocks
-
-        import pdb; pdb.set_trace()
-
-
-    probe_bad_subsets()
-    """
-
 
     if not analyze:
         do_optimization(d, gprf, X0, C0, cov_prior, x_prior, maxsec=args.maxsec, parallel=args.parallel, sparse=args.sparse)

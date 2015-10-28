@@ -1,4 +1,5 @@
-from gprf import GPRF, Blocker
+from gprf import GPRF
+from block_clustering import Blocker
 from synthetic import sample_synthetic
 
 from treegp.gp import GPCov, GP, mcov, prior_sample, dgaussian
@@ -14,9 +15,6 @@ import cPickle as pickle
 import argparse
 
 EXP_DIR = os.path.join(os.environ["HOME"], "gprf_experiments")
-
-
-
 
 class SampledData(object):
 
@@ -35,7 +33,6 @@ class SampledData(object):
 
         self.SX, self.SY = X, Y
         self.block_idxs = None
-        #self.centers = None
 
         self.obs_std = obs_std
         np.random.seed(seed)
@@ -54,8 +51,6 @@ class SampledData(object):
         self.block_idxs = cluster_idxs
         self.reblock = lambda X: cluster_rpc(X, all_idxs, target_size=blocksize, fixed_split=splits)[0]
         self.neighbors = None
-        #self.X_obs, self.SY, self.perm, self.block_boundaries = sort_by_cluster(CC)
-        #self.SX = self.SX[self.perm]
 
     def build_gprf(self, X=None, cov=None, local_dist=1e-4):
         if X is None:
@@ -309,14 +304,8 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
     bounds = None
 
     try:
-        if method=="scg":
-            print "optimizating with SCG (WARNING: no bound constraints!)"
-            from scg import SCG
-            rx, flog, fe, status = SCG(ll_wrapper, grad_wrapper, x0)
-            print status
-        else:
-            r = scipy.optimize.minimize(llgrad_wrapper, x0, jac=True, method=method, bounds=bounds, options = {"ftol": 1e-6, "maxiter": 200})
-            rx = r.x
+        r = scipy.optimize.minimize(llgrad_wrapper, x0, jac=True, method=method, bounds=bounds, options = {"ftol": 1e-6, "maxiter": 200})
+        rx = r.x
     except OutOfTimeError:
         print "terminated optimization for time"
 
@@ -329,13 +318,11 @@ def do_gpy_gplvm(d, gprf, X0, C0, sdata, method, maxsec=3600,
         f.write("")
 
 
-cachex = None
-cachell = None
-cachegrad = None
 
 def do_optimization(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False):
 
     def cov_prior(c):
+        # near-uniform prior on (logscale) covariance params
         mean = -1
         std = 10
         r = (c-mean)/std
@@ -375,7 +362,7 @@ def do_optimization(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False)
     else:
         x0 = np.array(())
 
-    cov_scale = 5.
+    cov_scale = 5. # hack to better condition optimization of cov params
     if gradC:
         c0 = np.log(C0.flatten()) * cov_scale
     else:
@@ -386,24 +373,6 @@ def do_optimization(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False)
     f_log = open(os.path.join(d, "log.txt"), 'w')
     t0 = time.time()
 
-
-    def lgpll(x):
-        global cachex, cachell, cachegrad
-        if cachex is None or (x != cachex).any():
-            cachex = x
-            cachell, cachegrad = lgpllgrad(x)
-        #else:
-        #    print "cache hit ll"
-        return cachell
-
-    def lgpgrad(x):
-        global cachex, cachell, cachegrad
-        if (x != cachex).any():
-            cachex = x
-            cachell, cachegrad = lgpllgrad(x)
-        #else:
-        #    print "cache hit grad"
-        return cachegrad
 
     def lgpllgrad(x):
 
@@ -447,21 +416,11 @@ def do_optimization(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False)
 
         return -ll, -grad
 
-    #bounds = [(0.0, 1.0),]*len(x0) + [(-10, 5)]*len(c0)
     bounds = None
     try:
-
-        if method=="scg":
-            print "optimizating with SCG (WARNING: no bound constraints!)"
-            from scg import SCG
-            f = lgpll
-            gradf = lambda x : lgpllgrad(x)[1]
-            rx, flog, fe, status = SCG(lgpll, lgpgrad, full0)
-            print status
-        else:
-            print "optimizing with %s" % method
-            r = scipy.optimize.minimize(lgpllgrad, full0, jac=True, method=method, bounds=bounds, options={"ftol": 1e-6, "maxiter": 200})
-            rx = r.x
+        print "optimizing with %s" % method
+        r = scipy.optimize.minimize(lgpllgrad, full0, jac=True, method=method, bounds=bounds, options={"ftol": 1e-6, "maxiter": 200})
+        rx = r.x
     except OutOfTimeError:
         print "terminated optimization for time"
 
@@ -472,87 +431,6 @@ def do_optimization(d, gprf, X0, C0, sdata, method, maxsec=3600, parallel=False)
     with open(os.path.join(d, "finished"), 'w') as f:
         f.write("")
 
-"""
-def do_block_ascent(d, gprf, X0, sdata, method, maxsec=3600, maxiter=10):
-
-    gprf.update_X(X0.copy())
-    init_ll = gprf.llgrad(grad_X=False)[0] + sdata.x_prior(X0.flatten())[0]
-    t0 = time.time()
-    
-    def optimize_block(i):
-        idxs = gprf.block_idxs[i]
-        X0_block = gprf.X[idxs].copy()
-        x0 = X0_block.flatten()
-
-        lls = []
-
-        def lgpllgrad(x):
-            if time.time()-t0 > maxsec:
-                raise OutOfTimeError
-
-            XX = x.reshape(X0_block.shape)
-            gprf.update_X_block(i, XX)
-            ll, gX = gprf.llgrad_blanket(i, grad_X=True)
-            
-            prior_ll, prior_grad = sdata.x_prior_block(i, x)
-            ll += prior_ll
-            gX = gX.flatten() + prior_grad
-            
-            grad = gX.flatten()
-            lls.append(ll)
-            #print ll, grad
-            return -ll, -grad
-
-        #bounds = [(0.0, 1.0),]*len(x0) 
-        bounds = None
-        r = scipy.optimize.minimize(lgpllgrad, x0, jac=True, method=method, bounds=bounds, options={"maxiter": maxiter})
-        rx = r.x
-        RX = rx.reshape(X0_block.shape)
-        gprf.update_X_block(i, RX)
-        new_ll = -r.fun
-        return  new_ll - lls[0]
-
-    
-
-    f_log = open(os.path.join(d, "log.txt"), 'w')
-    delta = np.inf
-    i_round = 0
-    i_step = 0
-    ll = init_ll
-    np.save(os.path.join(d, "step_%05d_X.npy" % i_step), gprf.X)
-    print "init prior", sdata.x_prior(gprf.X.flatten())[0]
-    while delta > 0.1:
-        i_round += 1        
-        print "round", i_round
-        #block_perm = np.random.permutation(gprf.n_blocks)
-        block_perm = [0,]
-        delta = 0
-        for i_block in block_perm:
-            try:
-                block_delta = optimize_block(i_block)
-            except OutOfTimeError:
-                print "terminated optimization for time"
-                delta = 0
-                break
-            print "prior", sdata.x_prior(gprf.X.flatten())[0]
-
-            delta += block_delta
-            i_step += 1
-            np.save(os.path.join(d, "step_%05d_X.npy" % i_step), gprf.X)
-
-
-            ll += block_delta
-            print "%d %.2f %.2f" % (i_step, time.time()-t0, ll)
-            f_log.write("%d %.2f %.2f\n" % (i_step, time.time()-t0, ll))
-            f_log.flush()
-    
-    t1 = time.time()
-    f_log.write("optimization finished after %.fs\n" % (time.time()-t0))
-    f_log.close()
-
-    with open(os.path.join(d, "finished"), 'w') as f:
-        f.write("")
-"""
 
 def load_log(d):
     log = os.path.join(d, "log.txt")
@@ -571,25 +449,6 @@ def load_log(d):
 
     return np.asarray(steps), np.asarray(times), np.asarray(lls)
 
-def dump_covs(d):
-    steps, times, lls = load_log(d)
-
-    cov_fname = os.path.join(d, "covs.txt")
-    print "writing to", cov_fname
-    covs = open(cov_fname, 'w')
-
-    for i, step in enumerate(steps):
-        try:
-            fname_cov = os.path.join(d, "step_%05d_cov.npy" % step)
-            FC = np.load(fname_cov)
-
-            s = "%d %s" % (step, FC)
-            print s
-            covs.write(s + "\n")
-        except IOError:
-            FC = None
-
-    covs.close()
 
 def analyze_run(d, sdata, local_dist=1.0, predict=False):
 
@@ -656,98 +515,6 @@ def analyze_run(d, sdata, local_dist=1.0, predict=False):
     results.write(s + "\n")
     results.close()
 
-"""
-def sort_by_cluster(clusters):
-    Xs, ys, perms = zip(*clusters)
-    SX = np.vstack(Xs)
-    SY = np.vstack(ys)
-    perm = np.concatenate(perms).flatten()
-    block_boundaries = []
-    n = 0
-    for (X,y,p) in clusters:
-        cn = X.shape[0]
-        block_boundaries.append((n, n+cn))
-        n += cn
-    return SX, SY, perm, block_boundaries
-"""
-
-"""
-def cluster_rpc((X, y, perm), target_size):
-    n = X.shape[0]
-    if n < target_size:
-        return [(X, y, perm),]
-
-    x1 = X[np.random.randint(n), :]
-    x2 = x1
-    while (x2==x1).all():
-        x2 = X[np.random.randint(n), :]
-
-    # what's the projection of x3 onto (x1-x2)?
-    # imagine that x2 is the origin, so it's just x3 onto x1.
-    # This is x1 * <x3, x1>/||x1||
-    cx1 = x1 - x2
-    nx1 = cx1 / np.linalg.norm(cx1)
-    alphas = [ np.dot(xi-x2, nx1)  for xi in X]
-    median = np.median(alphas)
-    C1 = (X[alphas < median], y[alphas < median], perm[alphas < median])
-    C2 = (X[alphas >= median], y[alphas >= median], perm[alphas >= median])
-
-    L1 = cluster_rpc(C1, target_size=target_size)
-    L2 = cluster_rpc(C2, target_size=target_size)
-    return L1 + L2
-"""
-
-def cluster_rpc(X, idxs, target_size, fixed_split=None):
-    # given: 
-    #  global array X listing all points
-    #  list of indices idxs
-    #  target cluster size
-    # return:
-    #  list of indices corresponding to a partition of the indices into the target size
-    
-
-    n = len(idxs)
-    if fixed_split is not None and len(fixed_split) == 0:
-        return [idxs,], ()
-
-    if fixed_split is None:
-        if n < target_size:
-            return [idxs,], ()
-
-        idx1 = np.random.choice(idxs)
-        idx2 = idx1
-        while (idx2==idx1).all():
-            idx2 = np.random.choice(idxs)
-
-
-        x1 = X[idx1,:]
-        x2 = X[idx2,:]
-
-        # what's the projection of x3 onto (x1-x2)?
-        # imagine that x2 is the origin, so it's just x3 onto x1.
-        # This is x1 * <x3, x1>/||x1||
-        cx1 = x1 - x2
-        nx1 = cx1 / np.linalg.norm(cx1)
-        fs1 = None
-        fs2 = None
-    else:
-        (nx1, x2), fs1, fs2 = fixed_split
-
-    if n > 0:
-        alphas = [ np.dot(X[i,:]-x2, nx1)  for i in idxs]
-        median = np.median(alphas)
-        idxs1 = idxs[alphas < median]
-        idxs2 = idxs[alphas >= median]
-    else:
-        idxs1 = ()
-        idxs2 = ()
-
-    L1, split1 = cluster_rpc(X, idxs1, target_size=target_size, fixed_split=fs1)
-    L2, split2 = cluster_rpc(X, idxs2, target_size=target_size, fixed_split=fs2)
-    
-    split = ((nx1, x2), split1, split2)
-
-    return L1 + L2, split
 
 def grid_centers(nblocks):
     pmax = np.ceil(np.sqrt(nblocks))*2+1
@@ -762,15 +529,14 @@ def do_run(d, lscale, n, ntrain, nblocks, yd, seed=0,
            init_seed=-1, parallel=False,
            noise_var=0.01, rpc_blocksize=-1, 
            gplvm_type=None, num_inducing=-1,
-           init_true = False,
-           block_ascent=False, block_maxiter=10):
+           init_true = False,):
 
     if rpc_blocksize==-1:
         centers = grid_centers(nblocks)
-        print "bcm with %d blocks" % (len(centers))
+        print "gprf with %d blocks" % (len(centers))
     else:
         centers = None
-        print "bcm with rpc blocksize %d" % rpc_blocksize
+        print "gprf with rpc blocksize %d" % rpc_blocksize
 
     if obs_std is None:
         obs_std = lscale/10
@@ -813,53 +579,21 @@ def do_run(d, lscale, n, ntrain, nblocks, yd, seed=0,
                          maxsec=maxsec, parallel=parallel,
                          gplvm_type=gplvm_type, num_inducing=num_inducing)
         else:
-            if block_ascent:
-                do_block_ascent(d, gprf, X0, data, method=method, maxsec=maxsec, maxiter=block_maxiter)
-            else:
-                do_optimization(d, gprf, X0, C0, data, method=method, maxsec=maxsec, parallel=parallel)
-
+            do_optimization(d, gprf, X0, C0, data, method=method, maxsec=maxsec, parallel=parallel)
 
     analyze_run(d, data, local_dist=local_dist, predict=analyze_full)
 
 
-def fast_analyze(d, sdata):
-
-    segs = os.path.basename(d).split("_")
-    ntrain = int(segs[0])
-    n = int(segs[1])
-    lscale = float(segs[3])
-    obs_std = float(segs[4])
-    yd = 50
-    seed = int(segs[-1][1:])
-
-
-
-    steps, times, lls = load_log(d)
-    best_idx = np.argmax(lls)
-    step = steps[best_idx]
-
-    rfname = os.path.join(d, "fast_results.txt")
-    results = open(rfname, 'w')
-
-    fname_X = os.path.join(d, "step_%05d_X.npy" % step)
-    X = np.load(fname_X)
-    l1 = sdata.mean_distance(X.flatten())
-    l2 = sdata.median_abs_err(X.flatten())
-
-    s = "%.2f %.4f %.4f" % (times[best_idx], l1, l2)
-    print s
-    results.write(s + "\n")
-    results.close()
 
 def build_run_name(args):
     try:
-        ntrain, n, nblocks, lscale, obs_std, local_dist, yd, method, task, init_seed, noise_var, rpc_blocksize, seed, gplvm_type, num_inducing, block_ascent, block_maxiter, init_true = (args.ntrain, args.n, args.nblocks, args.lscale, args.obs_std, args.local_dist, args.yd, args.method, args.task, args.init_seed, args.noise_var, args.rpc_blocksize, args.seed, args.gplvm_type, args.num_inducing, args.block_ascent, args.block_maxiter, args.init_true)
+        ntrain, ntest, nblocks, lscale, obs_std, local_dist, yd, method, task, init_seed, noise_var, rpc_blocksize, seed, gplvm_type, num_inducing, init_true = (args.n+args.ntest, args.ntest, args.nblocks, args.lscale, args.obs_std, args.local_dist, args.yd, args.method, args.task, args.init_seed, args.noise_var, args.rpc_blocksize, args.seed, args.gplvm_type, args.num_inducing, args.init_true)
     except:
-        defaults = { 'yd': 50, 'seed': 0, 'local_dist': 0.05, "method": 'l-bfgs-b', 'task': 'x', 'init_seed': -1, 'noise_var': 0.01, 'rpc_blocksize': -1, 'gplvm_type': "gprf", 'num_inducing': -1, 'block_ascent': False, 'block_maxiter': 10, 'init_true': False}
+        defaults = { 'yd': 50, 'seed': 0, 'local_dist': 0.05, "method": 'l-bfgs-b', 'task': 'x', 'init_seed': -1, 'noise_var': 0.01, 'rpc_blocksize': -1, 'gplvm_type': "gprf", 'num_inducing': -1, 'init_true': False}
         defaults.update(args)
         args = defaults
-        ntrain, n, nblocks, lscale, obs_std, local_dist, yd, method, task, init_seed, noise_var, rpc_blocksize, seed, gplvm_type, num_inducing, block_ascent, block_maxiter, init_true = (args['ntrain'], args['n'], args['nblocks'], args['lscale'], args['obs_std'], args['local_dist'], args['yd'], args['method'], args['task'], args['init_seed'], args['noise_var'], args['rpc_blocksize'], args['seed'], args['gplvm_type'], args['num_inducing'], args["block_ascent"], args["block_maxiter"], args["init_true"])
-    run_name = "%d_%d_%s_%.6f_%.6f_%.4f_%d_%s%s_%s_%d_%s_s%s_%s%d" % (ntrain, n, "%d" % nblocks if rpc_blocksize==-1 else "%06d" % rpc_blocksize, lscale, obs_std, local_dist, yd, method, "block%d" % block_maxiter if block_ascent else "", task, -9999 if init_true else init_seed, "%.4f" % noise_var, "%d" % seed, gplvm_type, num_inducing)
+        ntrain, ntest, nblocks, lscale, obs_std, local_dist, yd, method, task, init_seed, noise_var, rpc_blocksize, seed, gplvm_type, num_inducing, init_true = (args['n'], args['ntest'], args['nblocks'], args['lscale'], args['obs_std'], args['local_dist'], args['yd'], args['method'], args['task'], args['init_seed'], args['noise_var'], args['rpc_blocksize'], args['seed'], args['gplvm_type'], args['num_inducing'], args["init_true"])
+    run_name = "%d_%d_%s_%.6f_%.6f_%.4f_%d_%s_%s_%d_%s_s%s_%s%d" % (ntrain+ntest, ntrain, "%d" % nblocks if rpc_blocksize==-1 else "%06d" % rpc_blocksize, lscale, obs_std, local_dist, yd, method, task, -9999 if init_true else init_seed, "%.4f" % noise_var, "%d" % seed, gplvm_type, num_inducing)
     return run_name
 
 def exp_dir(args):
@@ -873,33 +607,31 @@ def main():
     mkdir_p(EXP_DIR)
 
     parser = argparse.ArgumentParser(description='gprf_opt')
-    parser.add_argument('--ntrain', dest='ntrain', type=int)
-    parser.add_argument('--n', dest='n', type=int)
-    parser.add_argument('--nblocks', dest='nblocks', default=1, type=int)
-    parser.add_argument('--rpc_blocksize', dest='rpc_blocksize', default=-1, type=int)
-    parser.add_argument('--lscale', dest='lscale', type=float)
-    parser.add_argument('--obs_std', dest='obs_std', type=float)
-    parser.add_argument('--local_dist', dest='local_dist', default=1.0, type=float)
-    parser.add_argument('--method', dest='method', default="l-bfgs-b", type=str)
-    parser.add_argument('--block_ascent', dest='block_ascent', default=False, action="store_true")
-    parser.add_argument('--block_maxiter', dest='block_maxiter', default=10, type=int)
-    parser.add_argument('--seed', dest='seed', default=0, type=int)
-    parser.add_argument('--yd', dest='yd', default=50, type=int)
-    parser.add_argument('--maxsec', dest='maxsec', default=3600, type=int)
-    parser.add_argument('--task', dest='task', default="x", type=str)
-    parser.add_argument('--analyze', dest='analyze', default=False, action="store_true")
-    parser.add_argument('--analyze_full', dest='analyze_full', default=False, action="store_true")
-    parser.add_argument('--parallel', dest='parallel', default=False, action="store_true")
-    parser.add_argument('--init_seed', dest='init_seed', default=-1, type=int)
-    parser.add_argument('--init_true', dest='init_true', default=False, action="store_true")
-    parser.add_argument('--noise_var', dest='noise_var', default=0.01, type=float)
-    parser.add_argument('--gplvm_type', dest='gplvm_type', default="gprf", type=str)
-    parser.add_argument('--num_inducing', dest='num_inducing', default=0, type=int)
+    parser.add_argument('--n', dest='n', type=int, help="number of points to locate")
+    parser.add_argument('--ntest', dest='ntest', type=int, default=500, help="sample additional test points to evaluate predictive accuracy (not in paper)")
+    parser.add_argument('--nblocks', dest='nblocks', default=1, type=int, help="divides the sampled points into a grid of this many blocks. May do strange things if number is not a perfect square. Mutually exclusive with rpc_blocksize. ")
+    parser.add_argument('--rpc_blocksize', dest='rpc_blocksize', default=-1, type=int, help="divides the sampled points into blocks using recursive projection clustering, aiming for this target blocksize. Mutually exclusive with nblocks. ")
+    parser.add_argument('--lscale', dest='lscale', type=float, help="SE kernel lengthscale for the sampled functions")
+    parser.add_argument('--obs_std', dest='obs_std', type=float, help="std of Gaussian noise corrupting the X locations")
+    parser.add_argument('--local_dist', dest='local_dist', default=1.0, type=float, help="when using RPC clustering, specifies minimum kernel value necessary to connect blocks in a GPRF (1.0 corresponds to local GPs). When using grids of blocks, any setting other than 1.0 yields a GPRF with neighbor connections. ")
+    parser.add_argument('--method', dest='method', default="l-bfgs-b", type=str, help="any optimization method supported by scipy.optimize.minimize (l-bfgs-b)")
+    parser.add_argument('--seed', dest='seed', default=0, type=int, help="seed for generating synthetic data")
+    parser.add_argument('--yd', dest='yd', default=50, type=int, help="number of output dimensions to sample (50)")
+    parser.add_argument('--maxsec', dest='maxsec', default=3600, type=int, help="maximum number of seconds to run the optimization (3600)")
+    parser.add_argument('--task', dest='task', default="x", type=str, help="'x', 'cov', or 'xcov' to infer locations, kernel hyperparams, or both. (x)")
+    parser.add_argument('--analyze', dest='analyze', default=False, action="store_true", help="just analyze existing saved inference results, don't do any new inference")
+    parser.add_argument('--analyze_full', dest='analyze_full', default=False, action="store_true", help="do a fuller (slower) analysis that also computes predictive accuracy")
+    parser.add_argument('--parallel', dest='parallel', default=False, action="store_true", help="run multiple threads for local/gprf blocks. be careful when combining this with multithreaded BLAS libraries.")
+    parser.add_argument('--init_seed', dest='init_seed', default=-1, type=int, help="if >=0, initialize optimization to locations generated from this random seed.")
+    parser.add_argument('--init_true', dest='init_true', default=False, action="store_true", help="initialize optimization at true X locations instead of observed locations (False)")
+    parser.add_argument('--noise_var', dest='noise_var', default=0.01, type=float, help="variance of iid noise in synthetic Y values")
+    parser.add_argument('--gplvm_type', dest='gplvm_type', default="gprf", type=str, help = "use 'sparse' or 'bayesian' for GPy inducing point comparison (gprf)")
+    parser.add_argument('--num_inducing', dest='num_inducing', default=0, type=int, help="number of inducing points to use with sparse approximations")
 
     args = parser.parse_args()
 
     d = exp_dir(args)
-    do_run(d=d, lscale=args.lscale, obs_std=args.obs_std, local_dist=args.local_dist, n=args.n, ntrain=args.ntrain, nblocks=args.nblocks, yd=args.yd, method=args.method, rpc_blocksize=args.rpc_blocksize, seed=args.seed, maxsec=args.maxsec, analyze_only=args.analyze, analyze_full = args.analyze_full, task=args.task, init_seed=args.init_seed, noise_var=args.noise_var, parallel=args.parallel, gplvm_type=args.gplvm_type, num_inducing=args.num_inducing, block_ascent=args.block_ascent, block_maxiter=args.block_maxiter, init_true=args.init_true)
+    do_run(d=d, lscale=args.lscale, obs_std=args.obs_std, local_dist=args.local_dist, n=args.n+args.ntest, ntrain=args.n, nblocks=args.nblocks, yd=args.yd, method=args.method, rpc_blocksize=args.rpc_blocksize, seed=args.seed, maxsec=args.maxsec, analyze_only=args.analyze, analyze_full = args.analyze_full, task=args.task, init_seed=args.init_seed, noise_var=args.noise_var, parallel=args.parallel, gplvm_type=args.gplvm_type, num_inducing=args.num_inducing, init_true=args.init_true)
 
 if __name__ == "__main__":
     main()
